@@ -1,0 +1,60 @@
+%% FarReach Tourism App - DFD Level 2 for Booking, Saved Spots, Reviews
+flowchart TB
+    classDef external fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#7c2d12
+    classDef process fill:#ecfeff,stroke:#0891b2,stroke-width:2px,color:#164e63
+    classDef store fill:#f1f5f9,stroke:#475569,stroke-width:2px,color:#0f172a
+
+    User[Traveler / User]
+    Admin[Admin]
+
+    B1((3.1 Select Destination))
+    B2((3.2 Save Spot))
+    B3((3.3 Create Booking))
+    B4((3.4 View or Cancel Booking))
+    R1((4.1 Submit Review))
+    R2((4.2 Edit or Delete Review))
+    R3((4.3 Moderate Review))
+
+    U[(Users)]
+    S[(Spots)]
+    SS[(Saved Spots)]
+    BK[(Bookings)]
+    RV[(Reviews)]
+
+    User -->|destination choice| B1
+    B1 -->|spot details| S
+    S -->|selected spot| B1
+    B1 -->|spot shown| User
+
+    User -->|save request| B2
+    B2 -->|verify user| U
+    B2 -->|store favorite| SS
+    B2 -->|saved confirmation| User
+
+    User -->|date, type, price| B3
+    B3 -->|verify user| U
+    B3 -->|verify spot| S
+    B3 -->|new booking| BK
+    B3 -->|booking confirmation| User
+
+    User -->|dashboard request or cancel| B4
+    B4 <--> BK
+    B4 -->|booking list/status| User
+
+    User -->|rating and comment| R1
+    R1 -->|verify user| U
+    R1 -->|verify spot| S
+    R1 -->|new review| RV
+    R1 -->|review posted| User
+
+    User -->|review changes| R2
+    R2 <--> RV
+    R2 -->|updated review list| User
+
+    Admin -->|delete or reply| R3
+    R3 <--> RV
+    R3 -->|moderation result| Admin
+
+    class User,Admin external
+    class B1,B2,B3,B4,R1,R2,R3 process
+    class U,S,SS,BK,RV store

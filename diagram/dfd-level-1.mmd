@@ -1,0 +1,66 @@
+%% FarReach Tourism App - DFD Level 1
+flowchart TB
+    classDef external fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#7c2d12
+    classDef process fill:#ecfeff,stroke:#0891b2,stroke-width:2px,color:#164e63
+    classDef store fill:#f1f5f9,stroke:#475569,stroke-width:2px,color:#0f172a
+
+    Traveler[Traveler / User]
+    Admin[Admin]
+    WeatherAPI[Weather API]
+    EmailService[Email Service]
+
+    P1((1.0 Authentication))
+    P2((2.0 Explore Destinations))
+    P3((3.0 Booking and Saved Spots))
+    P4((4.0 Reviews and Guides))
+    P5((5.0 Admin Management))
+    P6((6.0 Weather and Travel Info))
+
+    D1[(Users)]
+    D2[(Spots, Divisions, Districts)]
+    D3[(Bookings)]
+    D4[(Reviews)]
+    D5[(Saved Spots)]
+    D6[(Guides)]
+    D7[(OTP Records)]
+
+    Traveler -->|signup, login, profile update| P1
+    P1 -->|session and profile| Traveler
+    P1 -->|send OTP| EmailService
+    P1 <--> D1
+    P1 <--> D7
+
+    Traveler -->|search and filter request| P2
+    P2 -->|destination list and details| Traveler
+    P2 <--> D2
+
+    Traveler -->|booking or save request| P3
+    P3 -->|booking/saved spot status| Traveler
+    P3 <--> D1
+    P3 <--> D2
+    P3 <--> D3
+    P3 <--> D5
+
+    Traveler -->|review request, guide view| P4
+    P4 -->|reviews and guide list| Traveler
+    P4 <--> D1
+    P4 <--> D2
+    P4 <--> D4
+    P4 <--> D6
+
+    Admin -->|manage data| P5
+    P5 -->|stats and reports| Admin
+    P5 <--> D1
+    P5 <--> D2
+    P5 <--> D3
+    P5 <--> D4
+    P5 <--> D6
+
+    Traveler -->|district and trip date| P6
+    P6 -->|weather, forecast, hotels| Traveler
+    P6 -->|weather query| WeatherAPI
+    WeatherAPI -->|weather response| P6
+
+    class Traveler,Admin,WeatherAPI,EmailService external
+    class P1,P2,P3,P4,P5,P6 process
+    class D1,D2,D3,D4,D5,D6,D7 store

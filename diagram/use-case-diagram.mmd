@@ -1,0 +1,50 @@
+%% FarReach Tourism App - Use Case Diagram (Compact, PPTX 16:9)
+flowchart TB
+    classDef actor fill:#fff7ed,stroke:#f97316,stroke-width:2px,color:#7c2d12
+    classDef usecase fill:#f8fafc,stroke:#64748b,stroke-width:1.5px,color:#0f172a
+    classDef admin fill:#fef2f2,stroke:#ef4444,stroke-width:1.5px,color:#7f1d1d
+
+    Traveler(["Traveler / User"])
+    Admin(["Admin"])
+    WeatherAPI(["Weather API"])
+    EmailService(["Email Service"])
+
+    subgraph System["FarReach Tourism Explorer"]
+        direction TB
+
+        subgraph T["Traveler"]
+            direction TB
+            UC1((Browse)) ~~~ UC2((Search))
+            UC3((Details)) ~~~ UC4((Weather))
+            UC5((Register)) ~~~ UC6((Favorites))
+            UC7((Book)) ~~~ UC8((Review))
+            UC9((Profile)) ~~~ UC10((Dashboard))
+        end
+
+        subgraph A["Admin"]
+            direction TB
+            AD1((Spots)) ~~~ AD2((Districts))
+            AD3((Users)) ~~~ AD4((Guides))
+            AD5((Reviews)) ~~~ AD6((Bookings))
+            AD7((Stats))
+        end
+    end
+
+    Traveler --> UC1 & UC2 & UC3 & UC4 & UC5
+    Traveler --> UC6 & UC7 & UC8 & UC9 & UC10
+
+    Admin --> AD1 & AD2 & AD3 & AD4
+    Admin --> AD5 & AD6 & AD7
+
+    UC4 -. forecast .-> WeatherAPI
+    UC5 -. OTP .-> EmailService
+    UC7 -. login .-> UC5
+    UC8 -. login .-> UC5
+    UC6 -. login .-> UC5
+
+    class Traveler,Admin,WeatherAPI,EmailService actor
+    style System fill:#ecfeff,stroke:#0891b2,stroke-width:2px,color:#164e63
+    style T fill:#f0f9ff,stroke:#bae6fd,stroke-width:1px,color:#0c4a6e
+    style A fill:#fef2f2,stroke:#fecaca,stroke-width:1px,color:#7f1d1d
+    class UC1,UC2,UC3,UC4,UC5,UC6,UC7,UC8,UC9,UC10 usecase
+    class AD1,AD2,AD3,AD4,AD5,AD6,AD7 admin
