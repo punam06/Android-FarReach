@@ -1,4 +1,4 @@
-w# 🌏 FarReach — Bangladesh Tourism Explorer
+🌏 FarReach — Bangladesh Tourism Explorer
 
 A full-stack web application for exploring tourist destinations across Bangladesh. Discover 100+ destinations, check real-time weather, book trips, read & write reviews, and manage everything from a powerful admin dashboard.
 
@@ -56,27 +56,6 @@ A full-stack web application for exploring tourist destinations across Banglades
 
 ## 📁 Project Structure
 
-```
-FarReach-App/
-├── index.html              # Main homepage
-├── destination.html        # Destination detail page
-├── destination.js          # Destination page logic
-├── admin-dashboard.html    # Admin panel
-├── user-dashboard.html     # User panel
-├── dashboard.css           # Dashboard styles
-├── script.js               # Main site logic (spots, map, filters)
-├── auth.js                 # Authentication (login/signup/OTP)
-├── styles.css              # Main site styles
-├── .env                    # Root environment config
-├── server/
-│   ├── index.js            # Express server & all API routes
-│   ├── db.js               # MySQL connection pool
-│   ├── database.sql        # Database schema dump
-│   ├── .env                # Server environment config
-│   ├── .env.example        # Environment template
-│   └── package.json        # Node.js dependencies
-└── spot-pictures/          # Uploaded spot images
-```
 
 ---
 
@@ -270,10 +249,9 @@ The app will be running at **http://localhost:3000**
 
 ## 👥 Authors
 
-- **Punam Papri** — [GitHub](https://github.com/punam06)
+- ** Umme Hani Punam** — [GitHub](https://github.com/punam06)
+-  ** Abu Sayed** — [GitHub](https://github.com/Sayed-47)
+
 
 ---
 
-## 📄 License
-
-This project is licensed under the MIT License.
