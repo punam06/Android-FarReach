@@ -1,10 +1,10 @@
 🌏 FarReach — Bangladesh Tourism Explorer
 
-A full-stack web application for exploring tourist destinations across Bangladesh. Discover 100+ destinations, check real-time weather, book trips, read & write reviews, and manage everything from a powerful admin dashboard.
+An android application for exploring tourist destinations across Bangladesh. Discover 100+ destinations, check real-time weather, book trips, read & write reviews, and manage everything from a powerful admin dashboard.
 
 ![Node.js](https://img.shields.io/badge/Node.js-v18+-green?logo=node.js)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0-blue?logo=mysql)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+
 
 ---
 
