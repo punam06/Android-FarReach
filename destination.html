@@ -591,6 +591,22 @@
   <script src="script.js"></script>
   <script src="destination-init.js"></script>
   <script src="auth.js"></script>
-  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyD8aCnXAxDmrcw_nDP8kwa15qS7Yrv_QII&callback=onGoogleMapsApiLoaded"></script>
+  <script>
+    (() => {
+      const key = typeof window.GOOGLE_MAPS_API_KEY === 'string'
+        ? window.GOOGLE_MAPS_API_KEY.trim()
+        : '';
+      if (!key) return;
+
+      const mapsScript = document.createElement('script');
+      mapsScript.async = true;
+      mapsScript.defer = true;
+      const mapsUrl = new URL('https://maps.googleapis.com/maps/api/js');
+      mapsUrl.searchParams.set('key', key);
+      mapsUrl.searchParams.set('callback', 'onGoogleMapsApiLoaded');
+      mapsScript.src = mapsUrl.toString();
+      document.head.appendChild(mapsScript);
+    })();
+  </script>
 </body>
 </html>

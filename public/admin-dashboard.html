@@ -175,7 +175,7 @@
   <script>
     const API = (window.location.origin === 'null' || window.location.origin.startsWith('file') || window.location.port === '5500' || window.location.port === '5501') ? 'http://127.0.0.1:3000/api' : window.location.origin + '/api';
     console.log('Admin Dashboard API URL:', API);
-    let currentUser = null, allDivisions = [], allDistricts = [], allSpots = [];
+    let currentUser = null, allDivisions = [], allDistricts = [], allSpots = [], allUsers = [], allAdminReviews = [];
     let refreshInterval = null;
 
     function checkAuth() {
@@ -195,8 +195,40 @@
     function logout() { localStorage.removeItem('tourismAuthToken'); localStorage.removeItem('tourismAuthUser'); window.location.href = '/'; }
     function showToast(msg, type) { const t = document.getElementById('toast'); t.textContent = msg; t.className = 'toast ' + (type||'info') + ' show'; setTimeout(function(){ t.classList.remove('show'); }, 3000); }
     function closeModal(id) { document.getElementById(id).classList.remove('active'); }
-    function spotImage(img) { if (!img) return ''; return img.startsWith('http') ? img : '/spot-pictures/' + encodeURIComponent(img); }
-    function starsHTML(r) { var s = ''; for (var i = 1; i <= 5; i++) s += '<i class="fas fa-star" style="color:' + (i <= r ? '#F5A623' : '#E2E8F0') + ';font-size:12px;"></i>'; return s; }
+    function escapeHTML(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, function(char) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char];
+      });
+    }
+    function safeId(value) {
+      if (typeof value === 'string' && !/^[1-9]\d*$/.test(value)) return null;
+      if (typeof value !== 'string' && typeof value !== 'number') return null;
+      var id = Number(value);
+      return Number.isSafeInteger(id) && id > 0 ? id : null;
+    }
+    function safeNumber(value, fallback) {
+      var number = Number(value);
+      return Number.isFinite(number) ? number : (fallback == null ? 0 : fallback);
+    }
+    function formatDate(value, options) {
+      var date = new Date(value);
+      return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleDateString(undefined, options);
+    }
+    function spotImage(img) {
+      if (typeof img !== 'string' || !img.trim()) return '';
+      if (/^https?:\/\//i.test(img)) {
+        try {
+          var url = new URL(img);
+          return (url.protocol === 'http:' || url.protocol === 'https:') ? url.href : '';
+        } catch (e) { return ''; }
+      }
+      return '/spot-pictures/' + encodeURIComponent(img);
+    }
+    function optionHTML(id, label) {
+      var numericId = safeId(id);
+      return numericId ? '<option value="' + numericId + '">' + escapeHTML(label) + '</option>' : '';
+    }
+    function starsHTML(r) { var rating = Math.max(0, Math.min(5, safeNumber(r))); var s = ''; for (var i = 1; i <= 5; i++) s += '<i class="fas fa-star" style="color:' + (i <= rating ? '#F5A623' : '#E2E8F0') + ';font-size:12px;"></i>'; return s; }
 
     document.querySelectorAll('.sidebar-link[data-page]').forEach(function(link) {
       link.addEventListener('click', function() {
@@ -253,15 +285,18 @@
         var tb = document.getElementById('spots-table');
         if (allSpots.length === 0) { tb.innerHTML = '<tr><td colspan="6" class="empty-state">No spots found</td></tr>'; return; }
         tb.innerHTML = allSpots.map(function(s) {
+          var id = safeId(s.id);
           var badgeClass = 'badge-success';
           if (s.budget_category === 'High') badgeClass = 'badge-warning';
           else if (s.budget_category === 'Mid') badgeClass = 'badge-info';
-          return '<tr><td><img src="' + spotImage(s.image) + '" onerror="this.style.display=\'none\'"></td><td>' + s.name + '</td><td>' + (s.division_name || '-') + '</td><td>' + (s.district_name || '-') + '</td><td><span class="badge ' + badgeClass + '">' + s.budget_category + '</span></td><td><button class="btn-sm edit" onclick="editSpot(' + s.id + ')"><i class="fas fa-edit"></i></button> <button class="btn-sm delete" onclick="deleteSpot(' + s.id + ')"><i class="fas fa-trash"></i></button></td></tr>';
+          var actions = id ? '<button class="btn-sm edit" onclick="editSpot(' + id + ')"><i class="fas fa-edit"></i></button> <button class="btn-sm delete" onclick="deleteSpot(' + id + ')"><i class="fas fa-trash"></i></button>' : '';
+          return '<tr><td><img src="' + escapeHTML(spotImage(s.image)) + '" onerror="this.style.display=\'none\'"></td><td>' + escapeHTML(s.name) + '</td><td>' + escapeHTML(s.division_name || '-') + '</td><td>' + escapeHTML(s.district_name || '-') + '</td><td><span class="badge ' + badgeClass + '">' + escapeHTML(s.budget_category || '-') + '</span></td><td>' + actions + '</td></tr>';
         }).join('');
       } catch (e) { console.error(e); showToast('Failed to load spots', 'error'); }
     }
 
     async function openSpotModal(id) {
+      id = safeId(id);
       document.getElementById('spot-id').value = '';
       document.getElementById('spot-name').value = '';
       document.getElementById('spot-category').value = '';
@@ -276,7 +311,7 @@
       
       await loadSpotSelects();
       if (id) {
-        var spot = allSpots.find(function(s) { return s.id === id; });
+        var spot = allSpots.find(function(s) { return safeId(s.id) === id; });
         if (spot) {
           document.getElementById('spot-id').value = spot.id;
           document.getElementById('spot-name').value = spot.name;
@@ -302,7 +337,7 @@
         allDivisions = divData.divisions || [];
         allDistricts = distData.districts || [];
         var divSel = document.getElementById('spot-division');
-        divSel.innerHTML = '<option value="">Select Division</option>' + allDivisions.map(function(d) { return '<option value="' + d.id + '">' + d.name + '</option>'; }).join('');
+        divSel.innerHTML = '<option value="">Select Division</option>' + allDivisions.map(function(d) { return optionHTML(d.id, d.name); }).join('');
         updateDistrictSelect();
         divSel.onchange = updateDistrictSelect;
       } catch (e) { console.error('Error loading selects', e); }
@@ -312,7 +347,7 @@
       var divId = document.getElementById('spot-division').value;
       var distSel = document.getElementById('spot-district');
       var filtered = divId ? allDistricts.filter(function(d) { return d.division_id == divId; }) : allDistricts;
-      distSel.innerHTML = '<option value="">Select District</option>' + filtered.map(function(d) { return '<option value="' + d.id + '">' + d.name + '</option>'; }).join('');
+      distSel.innerHTML = '<option value="">Select District</option>' + filtered.map(function(d) { return optionHTML(d.id, d.name); }).join('');
     }
 
     async function saveSpot() {
@@ -355,6 +390,8 @@
     }
 
     async function deleteSpot(id) {
+      id = safeId(id);
+      if (!id) return;
       if (!confirm('Warning: Are you sure you want to permanently delete this tourist spot? This action cannot be undone and will also delete all associated bookings and reviews!')) return;
       try { var res = await fetch(API + '/admin/spots/' + id, { method: 'DELETE', headers: getHeaders() }); if (res.ok) { showToast('Spot permanently deleted', 'success'); loadSpots(); loadStats(); } else showToast('Failed to delete spot', 'error'); } catch (e) { showToast('Error: ' + e.message, 'error'); }
     }
@@ -368,8 +405,16 @@
         var distData = await distRes.json();
         allDivisions = divData.divisions || [];
         allDistricts = distData.districts || [];
-        document.getElementById('divisions-table').innerHTML = allDivisions.map(function(d) { return '<tr><td>' + d.name + '</td><td><button class="btn-sm edit" onclick="editDivision(' + d.id + ',\'' + d.name.replace(/'/g, "\\'") + '\')"><i class="fas fa-edit"></i></button> <button class="btn-sm delete" onclick="deleteDivision(' + d.id + ')"><i class="fas fa-trash"></i></button></td></tr>'; }).join('');
-        document.getElementById('districts-table').innerHTML = allDistricts.map(function(d) { return '<tr><td>' + d.name + '</td><td>' + (d.division_name || '-') + '</td><td><button class="btn-sm edit" onclick="editDistrict(' + d.id + ',\'' + d.name.replace(/'/g, "\\'") + '\',' + d.division_id + ')"><i class="fas fa-edit"></i></button> <button class="btn-sm delete" onclick="deleteDistrict(' + d.id + ')"><i class="fas fa-trash"></i></button></td></tr>'; }).join('');
+        document.getElementById('divisions-table').innerHTML = allDivisions.map(function(d) {
+          var id = safeId(d.id);
+          var actions = id ? '<button class="btn-sm edit" onclick="editDivision(' + id + ')"><i class="fas fa-edit"></i></button> <button class="btn-sm delete" onclick="deleteDivision(' + id + ')"><i class="fas fa-trash"></i></button>' : '';
+          return '<tr><td>' + escapeHTML(d.name) + '</td><td>' + actions + '</td></tr>';
+        }).join('');
+        document.getElementById('districts-table').innerHTML = allDistricts.map(function(d) {
+          var id = safeId(d.id);
+          var actions = id ? '<button class="btn-sm edit" onclick="editDistrict(' + id + ')"><i class="fas fa-edit"></i></button> <button class="btn-sm delete" onclick="deleteDistrict(' + id + ')"><i class="fas fa-trash"></i></button>' : '';
+          return '<tr><td>' + escapeHTML(d.name) + '</td><td>' + escapeHTML(d.division_name || '-') + '</td><td>' + actions + '</td></tr>';
+        }).join('');
       } catch (e) { showToast('Failed to load', 'error'); }
     }
 
@@ -379,7 +424,11 @@
       document.getElementById('division-modal-title').innerHTML = '<i class="fas fa-layer-group"></i> ' + (id ? 'Edit' : 'Add') + ' Division';
       document.getElementById('division-modal').classList.add('active');
     }
-    function editDivision(id, name) { openDivisionModal(id, name); }
+    function editDivision(id) {
+      id = safeId(id);
+      var division = allDivisions.find(function(item) { return safeId(item.id) === id; });
+      if (division) openDivisionModal(id, division.name);
+    }
 
     async function saveDivision() {
       var id = document.getElementById('division-id').value;
@@ -394,6 +443,8 @@
     }
 
     async function deleteDivision(id) {
+      id = safeId(id);
+      if (!id) return;
       if (!confirm('Delete this division?')) return;
       try { var res = await fetch(API + '/admin/divisions/' + id, { method: 'DELETE', headers: getHeaders() }); if (res.ok) { showToast('Deleted', 'success'); loadDivisions(); } else showToast('Failed', 'error'); } catch (e) {}
     }
@@ -402,12 +453,16 @@
       document.getElementById('district-id').value = id || '';
       document.getElementById('district-name').value = name || '';
       var sel = document.getElementById('district-division');
-      sel.innerHTML = allDivisions.map(function(d) { return '<option value="' + d.id + '">' + d.name + '</option>'; }).join('');
+      sel.innerHTML = allDivisions.map(function(d) { return optionHTML(d.id, d.name); }).join('');
       if (divId) sel.value = divId;
       document.getElementById('district-modal-title').innerHTML = '<i class="fas fa-map"></i> ' + (id ? 'Edit' : 'Add') + ' District';
       document.getElementById('district-modal').classList.add('active');
     }
-    function editDistrict(id, name, divId) { openDistrictModal(id, name, divId); }
+    function editDistrict(id) {
+      id = safeId(id);
+      var district = allDistricts.find(function(item) { return safeId(item.id) === id; });
+      if (district) openDistrictModal(id, district.name, safeId(district.division_id));
+    }
 
     async function saveDistrict() {
       var id = document.getElementById('district-id').value;
@@ -423,6 +478,8 @@
     }
 
     async function deleteDistrict(id) {
+      id = safeId(id);
+      if (!id) return;
       if (!confirm('Delete this district?')) return;
       try { var res = await fetch(API + '/admin/districts/' + id, { method: 'DELETE', headers: getHeaders() }); if (res.ok) { showToast('Deleted', 'success'); loadDivisions(); } else showToast('Failed', 'error'); } catch (e) {}
     }
@@ -434,11 +491,16 @@
         var data = await res.json();
         var tb = document.getElementById('guides-table');
         if (data.guides.length === 0) { tb.innerHTML = '<tr><td colspan="6" class="empty-state">No guides</td></tr>'; return; }
-        tb.innerHTML = data.guides.map(function(g) { return '<tr><td>' + g.name + '</td><td>' + (g.spot_name || '-') + '</td><td>' + (g.experience || '-') + '</td><td>' + starsHTML(g.rating) + '</td><td>' + (g.contact || '-') + '</td><td><button class="btn-sm edit" onclick="editGuide(' + g.id + ')"><i class="fas fa-edit"></i></button> <button class="btn-sm delete" onclick="deleteGuide(' + g.id + ')"><i class="fas fa-trash"></i></button></td></tr>'; }).join('');
+        tb.innerHTML = data.guides.map(function(g) {
+          var id = safeId(g.id);
+          var actions = id ? '<button class="btn-sm edit" onclick="editGuide(' + id + ')"><i class="fas fa-edit"></i></button> <button class="btn-sm delete" onclick="deleteGuide(' + id + ')"><i class="fas fa-trash"></i></button>' : '';
+          return '<tr><td>' + escapeHTML(g.name) + '</td><td>' + escapeHTML(g.spot_name || '-') + '</td><td>' + escapeHTML(g.experience || '-') + '</td><td>' + starsHTML(g.rating) + '</td><td>' + escapeHTML(g.contact || '-') + '</td><td>' + actions + '</td></tr>';
+        }).join('');
       } catch (e) { showToast('Failed to load', 'error'); }
     }
 
     async function openGuideModal(id) {
+      id = safeId(id);
       document.getElementById('guide-id').value = '';
       document.getElementById('guide-name').value = '';
       document.getElementById('guide-experience').value = '';
@@ -455,7 +517,7 @@
         var data = await res.json();
         var spotSel = document.getElementById('guide-spot');
         if (spotSel && data.spots) {
-          spotSel.innerHTML = '<option value="">Select Spot</option>' + data.spots.map(function(s) { return '<option value="' + s.id + '">' + s.name + '</option>'; }).join('');
+          spotSel.innerHTML = '<option value="">Select Spot</option>' + data.spots.map(function(s) { return optionHTML(s.id, s.name); }).join('');
         }
       } catch (e) { console.error('Error loading spots for guide', e); }
       if (id) {
@@ -463,7 +525,7 @@
           var res2 = await fetch(API + '/admin/guides', { headers: getHeaders() });
           var data2 = await res2.json();
           var guides = data2.guides || [];
-          var guide = guides.find(function(g) { return g.id === id; });
+          var guide = guides.find(function(g) { return safeId(g.id) === id; });
           if (guide) {
             document.getElementById('guide-id').value = guide.id;
             document.getElementById('guide-name').value = guide.name;
@@ -506,6 +568,8 @@
     }
 
     async function deleteGuide(id) {
+      id = safeId(id);
+      if (!id) return;
       if (!confirm('Are you sure you want to permanently delete this guide? This action cannot be undone.')) return;
       try { var res = await fetch(API + '/admin/guides/' + id, { method: 'DELETE', headers: getHeaders() }); if (res.ok) { showToast('Guide permanently deleted', 'success'); loadGuides(); loadStats(); } else showToast('Failed to delete guide', 'error'); } catch (e) { showToast('Error: ' + e.message, 'error'); }
     }
@@ -515,31 +579,39 @@
       try {
         var res = await fetch(API + '/admin/users', { headers: getHeaders() });
         var data = await res.json();
+        allUsers = Array.isArray(data.users) ? data.users : [];
         var tb = document.getElementById('users-table');
-        if (data.users.length === 0) { tb.innerHTML = '<tr><td colspan="6" class="empty-state">No users</td></tr>'; return; }
-        tb.innerHTML = data.users.map(function(u) {
-          var avatar = u.profile_pic ? '<img src="' + spotImage(u.profile_pic) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;margin-right:10px;">' : '<div style="width:36px;height:36px;border-radius:50%;background:#e2e8f0;display:inline-flex;align-items:center;justify-content:center;margin-right:10px;font-weight:bold;">' + u.name.charAt(0) + '</div>';
-          var userInfo = '<div style="display:flex;align-items:center;">' + avatar + '<div><strong>' + u.name + '</strong><br><small style="color:var(--muted);">' + u.email + '</small></div></div>';
-          var contactProfile = '<div style="font-size:13px;"><i class="fas fa-phone"></i> ' + (u.phone || 'N/A') + '<br><i class="fas fa-map-marker-alt"></i> ' + (u.address || 'N/A') + '</div>';
-          var joinedDate = u.createdAt ? new Date(u.createdAt).toLocaleDateString() : 'N/A';
-          var isSelf = currentUser && currentUser.id === u.id;
+        if (allUsers.length === 0) { tb.innerHTML = '<tr><td colspan="6" class="empty-state">No users</td></tr>'; return; }
+        tb.innerHTML = allUsers.map(function(u) {
+          var id = safeId(u.id);
+          var name = String(u.name || 'User');
+          var role = u.role === 'admin' ? 'admin' : 'user';
+          var avatar = u.profile_pic ? '<img src="' + escapeHTML(spotImage(u.profile_pic)) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;margin-right:10px;">' : '<div style="width:36px;height:36px;border-radius:50%;background:#e2e8f0;display:inline-flex;align-items:center;justify-content:center;margin-right:10px;font-weight:bold;">' + escapeHTML(name.charAt(0)) + '</div>';
+          var userInfo = '<div style="display:flex;align-items:center;">' + avatar + '<div><strong>' + escapeHTML(name) + '</strong><br><small style="color:var(--muted);">' + escapeHTML(u.email || '') + '</small></div></div>';
+          var contactProfile = '<div style="font-size:13px;"><i class="fas fa-phone"></i> ' + escapeHTML(u.phone || 'N/A') + '<br><i class="fas fa-map-marker-alt"></i> ' + escapeHTML(u.address || 'N/A') + '</div>';
+          var joinedDate = u.createdAt ? formatDate(u.createdAt) : 'N/A';
+          var isSelf = currentUser && safeId(currentUser.id) === id;
           var actions = '';
-          if (u.role === 'admin') {
+          if (id && role === 'admin') {
             if (!isSelf) {
-              actions += '<button class="btn-sm edit" onclick="toggleRole(' + u.id + ',\'' + u.role + '\')"><i class="fas fa-user-minus"></i> Remove Admin</button> ';
+              actions += '<button class="btn-sm edit" onclick="toggleRole(' + id + ')"><i class="fas fa-user-minus"></i> Remove Admin</button> ';
             }
-          } else {
-            actions += '<button class="btn-sm edit" onclick="toggleRole(' + u.id + ',\'' + u.role + '\')"><i class="fas fa-user-shield"></i> Make Admin</button> ';
+          } else if (id) {
+            actions += '<button class="btn-sm edit" onclick="toggleRole(' + id + ')"><i class="fas fa-user-shield"></i> Make Admin</button> ';
           }
-          if (!isSelf) {
-            actions += '<button class="btn-sm delete" onclick="deleteUser(' + u.id + ')"><i class="fas fa-trash"></i></button>';
+          if (id && !isSelf) {
+            actions += '<button class="btn-sm delete" onclick="deleteUser(' + id + ')"><i class="fas fa-trash"></i></button>';
           }
-          return '<tr><td>' + userInfo + '</td><td>' + contactProfile + '</td><td><span class="badge ' + (u.role === 'admin' ? 'badge-warning' : 'badge-info') + '">' + u.role + '</span></td><td>' + (u.is_verified ? '<span class="badge badge-success">Verified</span>' : '<span class="badge badge-danger">Unverified</span>') + '</td><td>' + joinedDate + '</td><td>' + actions + '</td></tr>';
+          return '<tr><td>' + userInfo + '</td><td>' + contactProfile + '</td><td><span class="badge ' + (role === 'admin' ? 'badge-warning' : 'badge-info') + '">' + role + '</span></td><td>' + (u.is_verified ? '<span class="badge badge-success">Verified</span>' : '<span class="badge badge-danger">Unverified</span>') + '</td><td>' + escapeHTML(joinedDate) + '</td><td>' + actions + '</td></tr>';
         }).join('');
       } catch (e) { showToast('Failed to load', 'error'); }
     }
 
-    async function toggleRole(id, currentRole) {
+    async function toggleRole(id) {
+      id = safeId(id);
+      var user = allUsers.find(function(item) { return safeId(item.id) === id; });
+      if (!id || !user) return;
+      var currentRole = user.role === 'admin' ? 'admin' : 'user';
       var newRole = currentRole === 'admin' ? 'user' : 'admin';
       if (!confirm('Change role to ' + newRole + '?')) return;
       try {
@@ -551,6 +623,8 @@
     }
 
     async function deleteUser(id) {
+      id = safeId(id);
+      if (!id) return;
       if (!confirm('Delete this user? This will also remove their reviews, saved spots, and bookings.')) return;
       try {
         var res = await fetch(API + '/admin/users/' + id, { method: 'DELETE', headers: getHeaders() });
@@ -567,17 +641,20 @@
         var res = await fetch(API + '/admin/reviews', { headers: getHeaders() });
         var data = await res.json();
         console.log('Admin reviews data:', data);
+        allAdminReviews = Array.isArray(data.reviews) ? data.reviews : [];
         var tb = document.getElementById('reviews-table');
-        if (!data.reviews || data.reviews.length === 0) { 
+        if (allAdminReviews.length === 0) {
           tb.innerHTML = '<tr><td colspan="6" class="empty-state">No reviews found in database.</td></tr>'; 
           return; 
         }
-        tb.innerHTML = data.reviews.map(function(r) {
-          var userStr = r.user_name ? r.user_name : (r.user_email ? r.user_email : 'Deleted User');
-          var spotStr = r.spot_name ? r.spot_name : '<span style="color:var(--muted);font-style:italic;">General Platform</span>';
-          var replyBtn = '<button class="btn-sm edit" onclick="openReplyModal(' + r.id + ',\'' + (r.admin_reply || '').replace(/'/g, "\\'") + '\')"><i class="fas fa-reply"></i> ' + (r.admin_reply ? 'Edit Reply' : 'Reply') + '</button>';
-          var replyContent = r.admin_reply ? '<div style="margin-top:8px; padding:6px; background:#f0f9f1; border-radius:4px; font-size:12px; color:#2e7d32;"><strong>Reply:</strong> ' + r.admin_reply + '</div>' : '';
-          return '<tr><td>' + userStr + '</td><td>' + spotStr + '</td><td>' + starsHTML(r.rating) + '</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;">' + (r.text || '-') + replyContent + '</td><td>' + new Date(r.created_at).toLocaleDateString() + '</td><td>' + replyBtn + ' <button class="btn-sm delete" onclick="deleteAdminReview(' + r.id + ')"><i class="fas fa-trash"></i></button></td></tr>';
+        tb.innerHTML = allAdminReviews.map(function(r) {
+          var id = safeId(r.id);
+          var userStr = escapeHTML(r.user_name || r.user_email || 'Deleted User');
+          var spotStr = r.spot_name ? escapeHTML(r.spot_name) : '<span style="color:var(--muted);font-style:italic;">General Platform</span>';
+          var replyBtn = id ? '<button class="btn-sm edit" onclick="openReplyModal(' + id + ')"><i class="fas fa-reply"></i> ' + (r.admin_reply ? 'Edit Reply' : 'Reply') + '</button>' : '';
+          var replyContent = r.admin_reply ? '<div style="margin-top:8px; padding:6px; background:#f0f9f1; border-radius:4px; font-size:12px; color:#2e7d32;"><strong>Reply:</strong> ' + escapeHTML(r.admin_reply) + '</div>' : '';
+          var deleteButton = id ? ' <button class="btn-sm delete" onclick="deleteAdminReview(' + id + ')"><i class="fas fa-trash"></i></button>' : '';
+          return '<tr><td>' + userStr + '</td><td>' + spotStr + '</td><td>' + starsHTML(r.rating) + '</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(r.text || '-') + replyContent + '</td><td>' + escapeHTML(formatDate(r.created_at)) + '</td><td>' + replyBtn + deleteButton + '</td></tr>';
         }).join('');
       } catch (e) { 
         console.error('Failed to load reviews:', e);
@@ -586,20 +663,25 @@
     }
 
     async function deleteAdminReview(id) {
+      id = safeId(id);
+      if (!id) return;
       if (!confirm('Delete this review?')) return;
       try { var res = await fetch(API + '/admin/reviews/' + id, { method: 'DELETE', headers: getHeaders() }); if (res.ok) { showToast('Review deleted', 'success'); loadAdminReviews(); } else showToast('Failed', 'error'); } catch (e) {}
     }
 
-    function openReplyModal(id, currentReply) {
+    function openReplyModal(id) {
+      id = safeId(id);
+      var review = allAdminReviews.find(function(item) { return safeId(item.id) === id; });
+      if (!id || !review) return;
       document.getElementById('reply-review-id').value = id;
-      document.getElementById('review-reply-text').value = currentReply || '';
+      document.getElementById('review-reply-text').value = review.admin_reply || '';
       document.getElementById('reply-modal').classList.add('active');
     }
 
     async function saveReviewReply() {
-      var id = document.getElementById('reply-review-id').value;
+      var id = safeId(document.getElementById('reply-review-id').value);
       var reply = document.getElementById('review-reply-text').value;
-      if (!reply) { showToast('Reply text required', 'error'); return; }
+      if (!id || !reply) { showToast(id ? 'Reply text required' : 'Invalid review', 'error'); return; }
       try {
         var res = await fetch(API + '/admin/reviews/' + id + '/reply', {
           method: 'PUT',
@@ -623,35 +705,39 @@
         today.setHours(0,0,0,0);
 
         tb.innerHTML = data.bookings.map(function(b) {
-          var typeIcon = b.type === 'hotel' ? 'hotel' : (b.type === 'guide' ? 'user-tie' : 'box-open');
+          var id = safeId(b.id);
+          var type = String(b.type || 'booking').toLowerCase();
+          var typeIcon = type === 'hotel' ? 'hotel' : (type === 'guide' ? 'user-tie' : 'box-open');
           
           const bookingDate = new Date(b.booking_date);
           const bookingDateOnly = new Date(bookingDate.getFullYear(), bookingDate.getMonth(), bookingDate.getDate());
           const isPast = bookingDateOnly < today;
           
-          var displayStatus = b.status;
+          var displayStatus = String(b.status || 'pending').toLowerCase();
           if (b.status === 'confirmed' && isPast) {
             displayStatus = 'completed';
           }
 
           var statusBadge = displayStatus === 'completed' ? 'badge-info' : (displayStatus === 'confirmed' ? 'badge-success' : (displayStatus === 'cancelled' ? 'badge-danger' : 'badge-warning'));
-          var traveler = (b.user_name || 'Deleted User') + '<br><small style="color:var(--muted);">' + (b.user_email || '') + '</small>';
+          var traveler = escapeHTML(b.user_name || 'Deleted User') + '<br><small style="color:var(--muted);">' + escapeHTML(b.user_email || '') + '</small>';
           
           var selectDropdown = '';
           if (displayStatus === 'completed') {
             selectDropdown = '<span style="color:#718096;font-size:12px;font-weight:500;">No actions (Completed)</span>';
           } else if (displayStatus === 'cancelled') {
             selectDropdown = '<span style="color:#718096;font-size:12px;font-weight:500;">No actions (Cancelled)</span>';
-          } else {
-            selectDropdown = '<select onchange="updateBookingStatus(' + b.id + ', this.value)" style="padding:4px;border-radius:4px;border:1px solid #ddd;"><option value="" disabled selected>Update Status</option><option value="confirmed">Confirm</option><option value="pending">Pending</option><option value="cancelled">Cancel</option></select>';
+          } else if (id) {
+            selectDropdown = '<select onchange="updateBookingStatus(' + id + ', this.value)" style="padding:4px;border-radius:4px;border:1px solid #ddd;"><option value="" disabled selected>Update Status</option><option value="confirmed">Confirm</option><option value="pending">Pending</option><option value="cancelled">Cancel</option></select>';
           }
 
-          return '<tr><td>' + traveler + '</td><td><span style="text-transform:capitalize;">' + b.type + '</span></td><td><i class="fas fa-' + typeIcon + '" style="color:var(--primary);"></i> ' + b.target_name + '</td><td>' + (b.booking_date ? new Date(b.booking_date).toLocaleDateString() : '-') + '</td><td>৳' + b.price + '</td><td><span class="badge ' + statusBadge + '" style="text-transform:capitalize;">' + displayStatus + '</span></td><td>' + selectDropdown + '</td></tr>';
+          return '<tr><td>' + traveler + '</td><td><span style="text-transform:capitalize;">' + escapeHTML(type) + '</span></td><td><i class="fas fa-' + typeIcon + '" style="color:var(--primary);"></i> ' + escapeHTML(b.target_name || '-') + '</td><td>' + escapeHTML(b.booking_date ? formatDate(b.booking_date) : '-') + '</td><td>৳' + escapeHTML(safeNumber(b.price).toLocaleString()) + '</td><td><span class="badge ' + statusBadge + '" style="text-transform:capitalize;">' + escapeHTML(displayStatus) + '</span></td><td>' + selectDropdown + '</td></tr>';
         }).join('');
       } catch (e) { showToast('Failed to load bookings', 'error'); }
     }
 
     async function updateBookingStatus(id, newStatus) {
+      id = safeId(id);
+      if (!id || !['confirmed', 'pending', 'cancelled'].includes(newStatus)) return loadAdminBookings();
       if (!confirm('Update booking status to ' + newStatus + '?')) return loadAdminBookings();
       try {
         var res = await fetch(API + '/admin/bookings/' + id + '/status', { method: 'PUT', headers: getJSONHeaders(), body: JSON.stringify({ status: newStatus }) });

@@ -14,15 +14,6 @@
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
-SET @MYSQLDUMP_TEMP_LOG_BIN = @@SESSION.SQL_LOG_BIN;
-SET @@SESSION.SQL_LOG_BIN= 0;
-
---
--- GTID state at the beginning of the backup 
---
-
-SET @@GLOBAL.GTID_PURGED=/*!80000 '+'*/ '8c344948-be4d-11f0-b0c8-aae57cbc3aec:1-2095';
-
 --
 -- Table structure for table `bookings`
 --
@@ -37,6 +28,7 @@ CREATE TABLE `bookings` (
   `target_name` varchar(255) NOT NULL,
   `price` int DEFAULT '0',
   `booking_date` date DEFAULT NULL,
+  `persons` int NOT NULL DEFAULT '1',
   `status` enum('pending','confirmed','cancelled') DEFAULT 'confirmed',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `spot_id` int DEFAULT NULL,
@@ -44,7 +36,8 @@ CREATE TABLE `bookings` (
   KEY `user_id` (`user_id`),
   KEY `fk_booking_spot` (`spot_id`),
   CONSTRAINT `bookings_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `fk_booking_spot` FOREIGN KEY (`spot_id`) REFERENCES `spots` (`id`) ON DELETE SET NULL
+  CONSTRAINT `fk_booking_spot` FOREIGN KEY (`spot_id`) REFERENCES `spots` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `bookings_chk_persons` CHECK ((`persons` between 1 and 20))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
@@ -156,6 +149,8 @@ CREATE TABLE `reviews` (
   `spot_id` int DEFAULT NULL,
   `rating` tinyint NOT NULL,
   `text` text,
+  `admin_reply` text,
+  `reply_at` timestamp NULL DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -239,7 +234,6 @@ CREATE TABLE `users` (
   UNIQUE KEY `email` (`email`)
 ) ENGINE=InnoDB AUTO_INCREMENT=10 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-SET @@SESSION.SQL_LOG_BIN = @MYSQLDUMP_TEMP_LOG_BIN;
 /*!40103 SET TIME_ZONE=@OLD_TIME_ZONE */;
 
 /*!40101 SET SQL_MODE=@OLD_SQL_MODE */;

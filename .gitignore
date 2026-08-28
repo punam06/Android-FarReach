@@ -3,5 +3,19 @@ server/.env
 node_modules/
 server/node_modules/
 .DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+*.temp
+*.swp
+.idea/
+.code-intel/
+.kiro/
+coverage/
+test-results/
+FarReach-debug.apk
+spot-pictures/profile-*
+public/spot-pictures/profile-*
 
 scratch/

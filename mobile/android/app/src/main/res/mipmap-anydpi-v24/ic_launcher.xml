@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@color/farreach_icon_background"
+        android:pathData="M18,6 L90,6 C96.63,6 102,11.37 102,18 L102,90 C102,96.63 96.63,102 90,102 L18,102 C11.37,102 6,96.63 6,90 L6,18 C6,11.37 11.37,6 18,6 Z" />
+    <path
+        android:fillColor="@color/farreach_icon_foreground"
+        android:pathData="M33,25 L77,25 L77,39 L49,39 L49,50 L71,50 L71,63 L49,63 L49,84 L33,84 Z" />
+    <path
+        android:fillColor="@color/farreach_icon_accent"
+        android:pathData="M79,69 C84.52,69 89,73.48 89,79 C89,84.52 84.52,89 79,89 C73.48,89 69,84.52 69,79 C69,73.48 73.48,69 79,69 Z" />
+</vector>

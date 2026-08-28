@@ -16,6 +16,16 @@
         "uriFormat": "http://localhost:%s",
         "action": "openExternally"
       }
+    },
+    {
+      "name": "FarReach Android (local API)",
+      "request": "launch",
+      "type": "dart",
+      "cwd": "mobile",
+      "toolArgs": [
+        "--dart-define",
+        "API_BASE_URL=http://10.0.2.2:3000"
+      ]
     }
   ]
 }

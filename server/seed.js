@@ -201,10 +201,34 @@ const specialtiesList = [
 ];
 const experienceOptions = ['2 years', '3 years', '4 years', '5 years', '6 years', '7 years', '8 years'];
 
+async function ensureColumn(table, column, definition) {
+  const [rows] = await db.query(
+    `SELECT 1
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?
+     LIMIT 1`,
+    [table, column]
+  );
+  if (rows.length > 0) return;
+
+  // Table, column, and definition are fixed internal values, not user input.
+  await db.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
+  console.log(`[seeder] Added ${table}.${column}`);
+}
+
+async function ensureMobileSchema() {
+  await ensureColumn('bookings', 'persons', "INT NOT NULL DEFAULT 1 AFTER booking_date");
+  await ensureColumn('reviews', 'admin_reply', 'TEXT NULL AFTER text');
+  await ensureColumn('reviews', 'reply_at', 'TIMESTAMP NULL DEFAULT NULL AFTER admin_reply');
+}
+
 async function seed() {
   console.log('[seeder] Starting database migration & synchronization...');
   
   try {
+    // Keep existing databases compatible with the mobile API additions.
+    await ensureMobileSchema();
+
     // 1. Alter spots table enum to support 'Mid'
     await db.query(`
       ALTER TABLE spots 
@@ -337,6 +361,7 @@ async function seed() {
     console.log('[seeder] Database migration and seeding successfully completed!');
   } catch (err) {
     console.error('[seeder] Error during database seeding:', err.message);
+    throw err;
   }
 }
 

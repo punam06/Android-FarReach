@@ -136,7 +136,7 @@
   <div class="toast" id="toast"></div>
   <script>
     const API = (window.location.origin === 'null' || window.location.origin.startsWith('file') || window.location.port === '5500' || window.location.port === '5501') ? 'http://127.0.0.1:3000/api' : window.location.origin + '/api';
-    let currentUser = null, editRating = 0;
+    let currentUser = null, editRating = 0, currentReviews = [], currentBookings = [];
     function checkAuth() {
       const token = localStorage.getItem('tourismAuthToken'), userStr = localStorage.getItem('tourismAuthUser');
       if (!token || !userStr) { window.location.href = '/'; return false; }
@@ -164,8 +164,32 @@
     });
     function loadPage(p) { if(p==='home')loadDashboard();else if(p==='saved')loadSavedSpots();else if(p==='reviews')loadReviews();else if(p==='bookings')loadBookings();else if(p==='profile')loadProfile();else if(p==='guides')loadGuides(); }
     function showToast(msg, type='info') { const t=document.getElementById('toast'); t.textContent=msg; t.className='toast '+type+' show'; setTimeout(()=>t.classList.remove('show'),3000); }
-    function starsHTML(r) { let s=''; for(let i=1;i<=5;i++) s+='<i class="fas fa-star" style="color:'+(i<=r?'#F5A623':'#E2E8F0')+'"></i>'; return s; }
-    function spotImage(img) { if(!img)return''; return img.startsWith('http')?img:'/spot-pictures/'+encodeURIComponent(img); }
+    function escapeHTML(value) {
+      return String(value == null ? '' : value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+    }
+    function safeId(value) {
+      if (typeof value === 'string' && !/^[1-9]\d*$/.test(value)) return null;
+      if (typeof value !== 'string' && typeof value !== 'number') return null;
+      const id = Number(value);
+      return Number.isSafeInteger(id) && id > 0 ? id : null;
+    }
+    function safeNumber(value, fallback = 0) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number : fallback;
+    }
+    function formatDate(value, options, locale) {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? 'N/A' : date.toLocaleDateString(locale, options);
+    }
+    function starsHTML(r) { const rating=Math.max(0,Math.min(5,safeNumber(r))); let s=''; for(let i=1;i<=5;i++) s+='<i class="fas fa-star" style="color:'+(i<=rating?'#F5A623':'#E2E8F0')+'"></i>'; return s; }
+    function spotImage(img) {
+      if(typeof img!=='string'||!img.trim())return'';
+      if(/^https?:\/\//i.test(img)) {
+        try { const url=new URL(img); return (url.protocol==='http:'||url.protocol==='https:')?url.href:''; }
+        catch(e) { return ''; }
+      }
+      return '/spot-pictures/'+encodeURIComponent(img);
+    }
     async function loadDashboard() {
       try {
         const res = await fetch(API+'/user/dashboard',{headers:getHeaders()});
@@ -177,23 +201,23 @@
         document.getElementById('greeting-name').textContent=currentUser.name.split(' ')[0];
         const se=document.getElementById('home-saved');
         if(data.recentSaved.length===0) se.innerHTML='<div class="empty-state"><i class="fas fa-heart"></i><h4>No saved spots yet</h4><p>Explore and save your favorites!</p></div>';
-        else se.innerHTML=data.recentSaved.map(s=>'<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #E2E8F0;"><img src="'+spotImage(s.image)+'" style="width:48px;height:48px;object-fit:cover;border-radius:8px;" onerror="this.style.display=\'none\'"><div><div style="font-size:14px;font-weight:500;">'+s.name+'</div><div style="font-size:12px;color:#718096;">'+(s.district_name||s.division_name||'')+'</div></div></div>').join('');
+        else se.innerHTML=data.recentSaved.map(s=>'<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid #E2E8F0;"><img src="'+escapeHTML(spotImage(s.image))+'" style="width:48px;height:48px;object-fit:cover;border-radius:8px;" onerror="this.style.display=\'none\'"><div><div style="font-size:14px;font-weight:500;">'+escapeHTML(s.name)+'</div><div style="font-size:12px;color:#718096;">'+escapeHTML(s.district_name||s.division_name||'')+'</div></div></div>').join('');
         const re=document.getElementById('home-reviews');
         if(data.recentReviews.length===0) re.innerHTML='<div class="empty-state"><i class="fas fa-star"></i><h4>No reviews yet</h4><p>Share your travel experiences!</p></div>';
         else re.innerHTML=data.recentReviews.map(r=>{
           const replyHtml = r.admin_reply ? `
             <div style="margin-top:8px; padding:8px; background:rgba(80, 216, 120, 0.05); border-radius:6px; border-left:3px solid var(--primary); font-size:12px;">
-              <strong style="color:var(--primary);">Admin Reply:</strong> ${r.admin_reply}
+              <strong style="color:var(--primary);">Admin Reply:</strong> ${escapeHTML(r.admin_reply)}
             </div>
           ` : '';
           return `
             <div class="review-item">
               <div class="review-item-header">
-                <span class="review-item-spot">${r.spot_name}</span>
-                <span class="review-item-date">${new Date(r.created_at).toLocaleDateString()}</span>
+                <span class="review-item-spot">${escapeHTML(r.spot_name || 'General Platform')}</span>
+                <span class="review-item-date">${escapeHTML(formatDate(r.created_at))}</span>
               </div>
               <div class="review-item-stars">${starsHTML(r.rating)}</div>
-              <div class="review-item-text">${r.text||'No comment'}</div>
+              <div class="review-item-text">${escapeHTML(r.text||'No comment')}</div>
               ${replyHtml}
             </div>
           `;
@@ -208,7 +232,7 @@
             today.setHours(0,0,0,0);
             const isPast = bookingDateOnly < today;
             
-            var displayStatus = b.status;
+            var displayStatus = String(b.status || 'pending').toLowerCase();
             if (b.status === 'confirmed' && isPast) {
               displayStatus = 'completed';
             }
@@ -217,10 +241,10 @@
             return `
               <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #E2E8F0;">
                 <div>
-                  <div style="font-size:14px;font-weight:600;"><i class="fas fa-calendar-alt" style="color:var(--primary);margin-right:6px;"></i>${b.spot_name || b.target_name || 'Booking'}</div>
-                  <div style="font-size:12px;color:#718096;margin-top:4px;">${new Date(b.booking_date).toLocaleDateString()} &nbsp;|&nbsp; ৳${b.price.toLocaleString()}</div>
+                  <div style="font-size:14px;font-weight:600;"><i class="fas fa-calendar-alt" style="color:var(--primary);margin-right:6px;"></i>${escapeHTML(b.spot_name || b.target_name || 'Booking')}</div>
+                  <div style="font-size:12px;color:#718096;margin-top:4px;">${escapeHTML(formatDate(b.booking_date))} &nbsp;|&nbsp; ৳${escapeHTML(safeNumber(b.price).toLocaleString())}</div>
                 </div>
-                <div style="font-size:12px;font-weight:600;color:${statusColor};text-transform:uppercase;">${displayStatus}</div>
+                <div style="font-size:12px;font-weight:600;color:${statusColor};text-transform:uppercase;">${escapeHTML(displayStatus)}</div>
               </div>
             `;
           }).join('');
@@ -233,47 +257,55 @@
         const data=await res.json();
         const g=document.getElementById('saved-spots-grid');
         if(data.spots.length===0) g.innerHTML='<div class="empty-state"><i class="fas fa-heart"></i><h4>No saved spots</h4><p>Browse and save your favorites!</p></div>';
-        else g.innerHTML=data.spots.map(s=>'<div class="spot-card"><img class="spot-card-img" src="'+spotImage(s.image)+'" onerror="this.style.background=\'var(--primary-light)\'"><div class="spot-card-body"><h4>'+s.name+'</h4><p>'+(s.district_name||'')+', '+(s.division_name||'')+'</p><div class="spot-card-meta"><span><i class="fas fa-tag"></i> '+(s.budget_category||'Low')+'</span></div><div class="spot-card-actions"><button class="btn-sm view" onclick="window.open(\'/?spot='+s.id+'\',\'_blank\')"><i class="fas fa-eye"></i> View</button><button class="btn-sm delete" onclick="unsaveSpot('+s.id+')"><i class="fas fa-heart-broken"></i> Unsave</button></div></div></div>').join('');
+        else g.innerHTML=data.spots.map(s=>{
+          const id=safeId(s.id);
+          const actions=id?'<button class="btn-sm view" onclick="viewSpot('+id+')"><i class="fas fa-eye"></i> View</button><button class="btn-sm delete" onclick="unsaveSpot('+id+')"><i class="fas fa-heart-broken"></i> Unsave</button>':'';
+          return '<div class="spot-card"><img class="spot-card-img" src="'+escapeHTML(spotImage(s.image))+'" onerror="this.style.background=\'var(--primary-light)\'"><div class="spot-card-body"><h4>'+escapeHTML(s.name)+'</h4><p>'+escapeHTML(s.district_name||'')+', '+escapeHTML(s.division_name||'')+'</p><div class="spot-card-meta"><span><i class="fas fa-tag"></i> '+escapeHTML(s.budget_category||'Low')+'</span></div><div class="spot-card-actions">'+actions+'</div></div></div>';
+        }).join('');
       } catch(e){showToast('Failed to load','error');}
     }
-    async function unsaveSpot(id){try{await fetch(API+'/user/saved-spots/'+id,{method:'DELETE',headers:getHeaders()});showToast('Spot removed','success');loadSavedSpots();}catch(e){showToast('Error','error');}}
+    function viewSpot(id){id=safeId(id);if(id)window.open('/?spot='+encodeURIComponent(id),'_blank','noopener');}
+    async function unsaveSpot(id){id=safeId(id);if(!id)return;try{await fetch(API+'/user/saved-spots/'+id,{method:'DELETE',headers:getHeaders()});showToast('Spot removed','success');loadSavedSpots();}catch(e){showToast('Error','error');}}
     async function loadReviews() {
       try {
         const res=await fetch(API+'/user/reviews',{headers:getHeaders()});
         const data=await res.json();
+        currentReviews=Array.isArray(data.reviews)?data.reviews:[];
         const l=document.getElementById('reviews-list');
-        if(data.reviews.length===0) l.innerHTML='<div class="empty-state"><i class="fas fa-star"></i><h4>No reviews yet</h4></div>';
-        else l.innerHTML=data.reviews.map(r=>{
+        if(currentReviews.length===0) l.innerHTML='<div class="empty-state"><i class="fas fa-star"></i><h4>No reviews yet</h4></div>';
+        else l.innerHTML=currentReviews.map(r=>{
+          const id=safeId(r.id);
           const replyHtml = r.admin_reply ? `
             <div class="admin-reply" style="margin-top:12px; padding:12px; background:rgba(80, 216, 120, 0.08); border-radius:10px; border-left:4px solid var(--primary);">
               <div style="font-weight:700; font-size:13px; color:var(--primary); margin-bottom:4px;"><i class="fas fa-reply"></i> Admin Response</div>
-              <div style="font-size:14px; line-height:1.5;">${r.admin_reply}</div>
-              ${r.reply_at ? `<div style="font-size:11px; color:#a0aec0; margin-top:6px;">Replied on ${new Date(r.reply_at).toLocaleDateString()}</div>` : ''}
+              <div style="font-size:14px; line-height:1.5;">${escapeHTML(r.admin_reply)}</div>
+              ${r.reply_at ? `<div style="font-size:11px; color:#a0aec0; margin-top:6px;">Replied on ${escapeHTML(formatDate(r.reply_at))}</div>` : ''}
             </div>
           ` : '';
+          const actions=id?`<button class="btn-sm edit" onclick="openEditReview(${id})"><i class="fas fa-edit"></i> Edit</button>
+                <button class="btn-sm delete" onclick="deleteReview(${id})"><i class="fas fa-trash"></i> Delete</button>`:'';
           return `
             <div class="review-item">
               <div class="review-item-header">
-                <span class="review-item-spot"><i class="fas fa-map-marker-alt" style="color:var(--primary);margin-right:4px;"></i>${r.spot_name}</span>
-                <span class="review-item-date">${new Date(r.created_at).toLocaleDateString()}</span>
+                <span class="review-item-spot"><i class="fas fa-map-marker-alt" style="color:var(--primary);margin-right:4px;"></i>${escapeHTML(r.spot_name || 'General Platform')}</span>
+                <span class="review-item-date">${escapeHTML(formatDate(r.created_at))}</span>
               </div>
               <div class="review-item-stars">${starsHTML(r.rating)}</div>
-              <div class="review-item-text">${r.text||'No comment'}</div>
+              <div class="review-item-text">${escapeHTML(r.text||'No comment')}</div>
               ${replyHtml}
               <div class="review-item-actions">
-                <button class="btn-sm edit" onclick="openEditReview(${r.id},${r.rating},'${(r.text||'').replace(/'/g,"\\'")}')"><i class="fas fa-edit"></i> Edit</button>
-                <button class="btn-sm delete" onclick="deleteReview(${r.id})"><i class="fas fa-trash"></i> Delete</button>
+                ${actions}
               </div>
             </div>
           `;
         }).join('');
       } catch(e){showToast('Failed to load','error');}
     }
-    function openEditReview(id,rating,text){document.getElementById('edit-review-id').value=id;document.getElementById('edit-review-text').value=text;editRating=rating;updateStarDisplay();document.getElementById('edit-review-modal').classList.add('active');}
+    function openEditReview(id){id=safeId(id);const review=currentReviews.find(r=>safeId(r.id)===id);if(!id||!review)return;document.getElementById('edit-review-id').value=id;document.getElementById('edit-review-text').value=review.text||'';editRating=Math.max(1,Math.min(5,safeNumber(review.rating,1)));updateStarDisplay();document.getElementById('edit-review-modal').classList.add('active');}
     function updateStarDisplay(){document.querySelectorAll('#edit-star-rating .star').forEach(s=>s.classList.toggle('active',parseInt(s.dataset.val)<=editRating));}
     document.querySelectorAll('#edit-star-rating .star').forEach(s=>s.addEventListener('click',()=>{editRating=parseInt(s.dataset.val);updateStarDisplay();}));
-    async function saveReviewEdit(){const id=document.getElementById('edit-review-id').value,text=document.getElementById('edit-review-text').value;try{const res=await fetch(API+'/user/reviews/'+id,{method:'PUT',headers:getHeaders(),body:JSON.stringify({rating:editRating,text})});if(res.ok){showToast('Review updated!','success');closeModal('edit-review-modal');loadReviews();}else showToast('Failed','error');}catch(e){showToast('Error','error');}}
-    async function deleteReview(id){if(!confirm('Delete this review?'))return;try{const res=await fetch(API+'/user/reviews/'+id,{method:'DELETE',headers:getHeaders()});if(res.ok){showToast('Review deleted','success');loadReviews();}else showToast('Failed','error');}catch(e){showToast('Error','error');}}
+    async function saveReviewEdit(){const id=safeId(document.getElementById('edit-review-id').value),text=document.getElementById('edit-review-text').value;if(!id)return showToast('Invalid review','error');try{const res=await fetch(API+'/user/reviews/'+id,{method:'PUT',headers:getHeaders(),body:JSON.stringify({rating:editRating,text})});if(res.ok){showToast('Review updated!','success');closeModal('edit-review-modal');loadReviews();}else showToast('Failed','error');}catch(e){showToast('Error','error');}}
+    async function deleteReview(id){id=safeId(id);if(!id||!confirm('Delete this review?'))return;try{const res=await fetch(API+'/user/reviews/'+id,{method:'DELETE',headers:getHeaders()});if(res.ok){showToast('Review deleted','success');loadReviews();}else showToast('Failed','error');}catch(e){showToast('Error','error');}}
     function closeModal(id){document.getElementById(id).classList.remove('active');}
     function loadProfile() {
       document.getElementById('profile-name').textContent=currentUser.name;
@@ -341,11 +373,20 @@
         showToast('Error', 'error');
       }
     }
-    async function loadGuides(){try{const res=await fetch(API+'/user/guides',{headers:getHeaders()});const data=await res.json();const g=document.getElementById('guides-grid');if(data.guides.length===0)g.innerHTML='<div class="empty-state"><i class="fas fa-map-marked-alt"></i><h4>No guides found</h4><p>Save spots to see their guides!</p></div>';else g.innerHTML=data.guides.map(g=>'<div class="guide-card"><h4><i class="fas fa-user-tie" style="color:var(--primary);margin-right:6px;"></i>'+g.name+'</h4><div class="guide-spot"><i class="fas fa-map-marker-alt"></i> '+(g.spot_name||'N/A')+'</div><div class="guide-card-details"><div><i class="fas fa-clock"></i> '+(g.experience||'N/A')+'</div><div><i class="fas fa-star"></i> '+(g.rating||'N/A')+'</div><div><i class="fas fa-language"></i> '+(g.languages||'N/A')+'</div><div><i class="fas fa-tag"></i> ৳'+(g.price||'0')+'</div><div><i class="fas fa-phone"></i> '+(g.contact||'N/A')+'</div><div><i class="fas fa-award"></i> '+(g.specialties||'N/A')+'</div></div></div>').join('');}catch(e){showToast('Failed to load','error');}}
+    async function loadGuides(){
+      try{
+        const res=await fetch(API+'/user/guides',{headers:getHeaders()});
+        const data=await res.json();
+        const g=document.getElementById('guides-grid');
+        if(data.guides.length===0)g.innerHTML='<div class="empty-state"><i class="fas fa-map-marked-alt"></i><h4>No guides found</h4><p>Save spots to see their guides!</p></div>';
+        else g.innerHTML=data.guides.map(guide=>'<div class="guide-card"><h4><i class="fas fa-user-tie" style="color:var(--primary);margin-right:6px;"></i>'+escapeHTML(guide.name)+'</h4><div class="guide-spot"><i class="fas fa-map-marker-alt"></i> '+escapeHTML(guide.spot_name||'N/A')+'</div><div class="guide-card-details"><div><i class="fas fa-clock"></i> '+escapeHTML(guide.experience||'N/A')+'</div><div><i class="fas fa-star"></i> '+escapeHTML(guide.rating||'N/A')+'</div><div><i class="fas fa-language"></i> '+escapeHTML(guide.languages||'N/A')+'</div><div><i class="fas fa-tag"></i> ৳'+escapeHTML(guide.price||'0')+'</div><div><i class="fas fa-phone"></i> '+escapeHTML(guide.contact||'N/A')+'</div><div><i class="fas fa-award"></i> '+escapeHTML(guide.specialties||'N/A')+'</div></div></div>').join('');
+      }catch(e){showToast('Failed to load','error');}
+    }
     async function loadBookings(){
       try{
         const res=await fetch(API+'/user/bookings',{headers:getHeaders()});
         const data=await res.json();
+        currentBookings=Array.isArray(data.bookings)?data.bookings:[];
         
         const activeBl=document.getElementById('active-bookings-list');
         const previousBl=document.getElementById('previous-bookings-list');
@@ -356,7 +397,7 @@
         const activeBookings = [];
         const previousBookings = [];
         
-        data.bookings.forEach(function(b) {
+        currentBookings.forEach(function(b) {
           const bookingDate = new Date(b.booking_date);
           const bookingDateOnly = new Date(bookingDate.getFullYear(), bookingDate.getMonth(), bookingDate.getDate());
           const isPast = bookingDateOnly < today;
@@ -370,13 +411,15 @@
 
         // Helper function to render a booking card
         function renderBookingCard(b, isActive) {
-          var typeIcon = b.type==='hotel'?'hotel':(b.type==='guide'?'user-tie':'box-open');
+          var id = safeId(b.id);
+          var type = String(b.type||'booking').toLowerCase();
+          var typeIcon = type==='hotel'?'hotel':(type==='guide'?'user-tie':'box-open');
           
           const bookingDate = new Date(b.booking_date);
           const bookingDateOnly = new Date(bookingDate.getFullYear(), bookingDate.getMonth(), bookingDate.getDate());
           const isPast = bookingDateOnly < today;
           
-          var displayStatus = b.status;
+          var displayStatus = String(b.status||'pending').toLowerCase();
           if (b.status === 'confirmed' && isPast) {
             displayStatus = 'completed';
           }
@@ -384,27 +427,28 @@
           var statusColor = displayStatus==='completed'?'#4299e1':(displayStatus==='confirmed'?'var(--success)':(displayStatus==='cancelled'?'var(--danger)':'#F5A623'));
           var statusBg = displayStatus==='completed'?'rgba(66,153,225,0.1)':(displayStatus==='confirmed'?'rgba(80,216,120,0.1)':(displayStatus==='cancelled'?'rgba(229,62,62,0.1)':'rgba(245,166,35,0.1)'));
           
-          var spotLabel = b.spot_name || b.target_name || 'Unknown';
-          var dateStr = b.booking_date ? new Date(b.booking_date).toLocaleDateString('en-US',{weekday:'short',year:'numeric',month:'short',day:'numeric'}) : 'N/A';
-          var createdStr = b.created_at ? new Date(b.created_at).toLocaleDateString() : '';
+          var spotLabel = String(b.spot_name || b.target_name || 'Unknown');
+          var dateStr = b.booking_date ? formatDate(b.booking_date,{weekday:'short',year:'numeric',month:'short',day:'numeric'},'en-US') : 'N/A';
+          var createdStr = b.created_at ? formatDate(b.created_at) : '';
+          var price = safeNumber(b.price);
 
           var cancelBtn = '';
-          if (isActive && b.status !== 'cancelled') {
-            cancelBtn = '<button class="btn-sm delete" onclick="openCancelModal('+b.id+', \''+spotLabel.replace(/'/g, "\\'")+'\', \''+dateStr+'\', \''+b.type+'\', '+b.price+')" style="margin-top:8px;"><i class="fas fa-times-circle"></i> Cancel Booking</button>';
+          if (id && isActive && displayStatus !== 'cancelled') {
+            cancelBtn = '<button class="btn-sm delete" onclick="openCancelModal('+id+')" style="margin-top:8px;"><i class="fas fa-times-circle"></i> Cancel Booking</button>';
           }
 
           return '<div style="border:1px solid rgba(255,255,255,0.06);border-radius:12px;padding:16px;margin-bottom:12px;background:rgba(255,255,255,0.02);">'+
             '<div style="display:flex;justify-content:space-between;align-items:flex-start;">'+
               '<div>'+
-                '<strong style="font-size:15px;"><i class="fas fa-'+typeIcon+'" style="color:var(--primary);margin-right:6px;"></i>'+spotLabel+'</strong>'+
+                '<strong style="font-size:15px;"><i class="fas fa-'+typeIcon+'" style="color:var(--primary);margin-right:6px;"></i>'+escapeHTML(spotLabel)+'</strong>'+
                 '<div style="font-size:13px;color:#718096;margin-top:4px;">'+
-                  '<i class="fas fa-calendar" style="margin-right:4px;"></i>'+dateStr+
-                  ' &nbsp;|&nbsp; <i class="fas fa-tag" style="margin-right:4px;"></i>'+b.type.toUpperCase()+
-                  ' &nbsp;|&nbsp; <strong style="color:#a9e8bb;">৳'+b.price.toLocaleString()+'</strong>'+
+                  '<i class="fas fa-calendar" style="margin-right:4px;"></i>'+escapeHTML(dateStr)+
+                  ' &nbsp;|&nbsp; <i class="fas fa-tag" style="margin-right:4px;"></i>'+escapeHTML(type.toUpperCase())+
+                  ' &nbsp;|&nbsp; <strong style="color:#a9e8bb;">৳'+escapeHTML(price.toLocaleString())+'</strong>'+
                 '</div>'+
-                (createdStr ? '<div style="font-size:11px;color:#a0aec0;margin-top:2px;">Booked on '+createdStr+'</div>' : '')+
+                (createdStr ? '<div style="font-size:11px;color:#a0aec0;margin-top:2px;">Booked on '+escapeHTML(createdStr)+'</div>' : '')+
               '</div>'+
-              '<span style="padding:4px 10px;border-radius:8px;font-size:12px;font-weight:600;color:'+statusColor+';background:'+statusBg+';text-transform:uppercase;">'+displayStatus+'</span>'+
+              '<span style="padding:4px 10px;border-radius:8px;font-size:12px;font-weight:600;color:'+statusColor+';background:'+statusBg+';text-transform:uppercase;">'+escapeHTML(displayStatus)+'</span>'+
             '</div>'+
             cancelBtn+
           '</div>';
@@ -431,7 +475,14 @@
       } catch(e){showToast('Failed to load bookings','error');}
     }
 
-    window.openCancelModal = function(id, spotName, dateStr, type, price) {
+    window.openCancelModal = function(id) {
+      id=safeId(id);
+      const booking=currentBookings.find(item=>safeId(item.id)===id);
+      if(!id||!booking)return;
+      const spotName=String(booking.spot_name||booking.target_name||'Unknown');
+      const dateStr=booking.booking_date?formatDate(booking.booking_date,{weekday:'short',year:'numeric',month:'short',day:'numeric'},'en-US'):'N/A';
+      const type=String(booking.type||'booking');
+      const price=safeNumber(booking.price);
       document.getElementById('cancel-booking-id').value = id;
       document.getElementById('cancelModalSpot').textContent = spotName;
       document.getElementById('cancelModalDate').textContent = dateStr;
@@ -449,6 +500,8 @@
     };
 
     async function cancelBooking(id) {
+      id=safeId(id);
+      if(!id)return;
       try {
         var res = await fetch(API+'/user/bookings/'+id, {
           method: 'DELETE',
@@ -472,11 +525,16 @@
       document.getElementById('user-email').textContent=currentUser.email;
       
       const av = document.getElementById('user-avatar');
+      av.replaceChildren();
       if (currentUser.profile_pic) {
-        av.innerHTML = `<img src="${spotImage(currentUser.profile_pic)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">`;
+        const image = document.createElement('img');
+        image.src = spotImage(currentUser.profile_pic);
+        image.alt = '';
+        image.style.cssText = 'width:100%;height:100%;border-radius:50%;object-fit:cover;';
+        av.appendChild(image);
         av.style.background = 'transparent';
       } else {
-        av.innerHTML = currentUser.name.charAt(0).toUpperCase();
+        av.textContent = String(currentUser.name || 'U').charAt(0).toUpperCase();
       }
       
       document.getElementById('greeting-name').textContent=currentUser.name.split(' ')[0];

@@ -21,27 +21,68 @@ for (const envPath of envPaths) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const clientRoot = projectRoot;
+const clientRoot = path.join(projectRoot, 'public');
+const imageRoot = path.join(clientRoot, 'spot-pictures');
+const clientFiles = new Set([
+  'admin-dashboard.html',
+  'auth.js',
+  'dashboard.css',
+  'destination-init.js',
+  'destination.html',
+  'destination.js',
+  'index.html',
+  'script.js',
+  'styles.css',
+  'user-dashboard.html',
+]);
+const allowedImageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
 app.use(express.json({ limit: '1mb' }));
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-Token');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
   next();
 });
 
-app.use(express.static(clientRoot));
+function sendClientFile(fileName) {
+  if (!clientFiles.has(fileName)) throw new Error(`Client file is not allowlisted: ${fileName}`);
+  return (req, res) => res.sendFile(path.join(clientRoot, fileName));
+}
+
+for (const fileName of clientFiles) {
+  app.get([`/${fileName}`, `/public/${fileName}`], sendClientFile(fileName));
+}
+
+const imageStaticMiddleware = express.static(imageRoot, {
+  dotfiles: 'deny',
+  fallthrough: false,
+  index: false,
+});
+
+function serveImageFiles(req, res, next) {
+  if (!allowedImageExtensions.has(path.extname(req.path).toLowerCase())) {
+    return res.status(404).json({ error: 'Image not found' });
+  }
+  return imageStaticMiddleware(req, res, next);
+}
+
+app.use(['/spot-pictures', '/public/spot-pictures'], serveImageFiles);
 
 app.get('/client-config.js', (req, res) => {
   const clientConfig = {
     APP_API_BASE_URL: process.env.APP_API_BASE_URL || `http://127.0.0.1:${PORT}`,
+    GOOGLE_MAPS_API_KEY: (process.env.GOOGLE_MAPS_API_KEY || '').trim(),
   };
 
-  res.type('application/javascript').send(`window.APP_API_BASE_URL = ${JSON.stringify(clientConfig.APP_API_BASE_URL)};`);
+  res.type('application/javascript').send([
+    `window.APP_API_BASE_URL = ${JSON.stringify(clientConfig.APP_API_BASE_URL)};`,
+    `window.GOOGLE_MAPS_API_KEY = ${JSON.stringify(clientConfig.GOOGLE_MAPS_API_KEY)};`,
+  ].join('\n'));
 });
 
 // Admin authentication middleware
@@ -60,38 +101,83 @@ async function requireAuth(req, res, next) {
 }
 
 
-// Multer storage for spot images
+const allowedUploadTypes = new Map([
+  ['image/jpeg', { extension: '.jpg', originalExtensions: new Set(['.jpg', '.jpeg']) }],
+  ['image/png', { extension: '.png', originalExtensions: new Set(['.png']) }],
+  ['image/webp', { extension: '.webp', originalExtensions: new Set(['.webp']) }],
+]);
+
+function uploadFileFilter(req, file, cb) {
+  const type = allowedUploadTypes.get((file.mimetype || '').toLowerCase());
+  const originalExtension = path.extname(file.originalname || '').toLowerCase();
+  if (!type || !type.originalExtensions.has(originalExtension)) {
+    const error = new Error('Only JPEG, PNG, and WebP images are allowed');
+    error.code = 'INVALID_IMAGE_TYPE';
+    return cb(error);
+  }
+  return cb(null, true);
+}
+
+// Multer storage for spot and profile images.
 const storage = multer.diskStorage({
-  destination: path.join(clientRoot, 'spot-pictures'),
+  destination: imageRoot,
   filename: (req, file, cb) => {
-    const unique = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, unique + path.extname(file.originalname));
+    const type = allowedUploadTypes.get((file.mimetype || '').toLowerCase());
+    cb(null, `${crypto.randomUUID()}${type.extension}`);
   }
 });
-const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } });
-
-
-app.get('/', (req, res) => {
-  res.sendFile(path.join(clientRoot, 'index.html'));
+const upload = multer({
+  storage,
+  fileFilter: uploadFileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 1,
+  },
 });
 
-app.get('/login', (req, res) => {
-  res.sendFile(path.join(clientRoot, 'index.html'));
-});
 
-app.get('/admin-dashboard', (req, res) => {
-  res.sendFile(path.join(clientRoot, 'admin-dashboard.html'));
-});
-
-app.get('/user-dashboard', (req, res) => {
-  res.sendFile(path.join(clientRoot, 'user-dashboard.html'));
-});
+app.get(['/', '/login', '/public', '/public/'], sendClientFile('index.html'));
+app.get('/admin-dashboard', sendClientFile('admin-dashboard.html'));
+app.get('/user-dashboard', sendClientFile('user-dashboard.html'));
 
 
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
+
+const MAX_BOOKING_PERSONS = 20;
+const BOOKING_TIME_ZONE = 'Asia/Dhaka';
+
+function parsePositiveInteger(value) {
+  const normalized = typeof value === 'string' ? value.trim() : value;
+  if (typeof normalized !== 'string' && typeof normalized !== 'number') return null;
+  if (typeof normalized === 'string' && !/^[1-9]\d*$/.test(normalized)) return null;
+
+  const parsed = Number(normalized);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isValidDateOnly(value) {
+  if (typeof value !== 'string' || !/^[1-9]\d{3}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return parsed.getUTCFullYear() === year
+    && parsed.getUTCMonth() === month - 1
+    && parsed.getUTCDate() === day;
+}
+
+function currentDateInTimeZone(timeZone) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
 
 function getApiKey() {
   const key = (process.env.OPENWEATHER_API_KEY ?? '').trim();
@@ -262,7 +348,7 @@ function summarizeForecast(data, date) {
 
   let finalTempMax = Number.isFinite(tempMax) ? Math.round(tempMax) : null;
   let finalTempMin = Number.isFinite(tempMin) ? Math.round(tempMin) : null;
-  
+
   if (finalTempMax !== null && finalTempMin !== null) {
     if (finalTempMax - finalTempMin > 2) {
       finalTempMin = finalTempMax - 2;
@@ -439,6 +525,78 @@ function generateVerificationCode() {
   return String(crypto.randomInt(100000, 1000000));
 }
 
+const OTP_TTL_MS = 10 * 60 * 1000;
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const OTP_REQUEST_WINDOW_MS = 15 * 60 * 1000;
+const OTP_MAX_EMAIL_REQUESTS = 5;
+const OTP_MAX_IP_REQUESTS = 30;
+const OTP_ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
+const OTP_MAX_FAILED_ATTEMPTS = 5;
+const OTP_BLOCK_MS = 15 * 60 * 1000;
+const otpRequestWindows = new Map();
+
+function isDevelopmentMode() {
+  return process.env.NODE_ENV === 'development';
+}
+
+function publicDeliveryError(message, statusCode = 503) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.isPublic = true;
+  return error;
+}
+
+function otpWindowState(key, now) {
+  const current = otpRequestWindows.get(key);
+  if (!current || now - current.windowStartedAt >= OTP_REQUEST_WINDOW_MS) {
+    return { count: 0, windowStartedAt: now, lastRequestAt: 0 };
+  }
+  return current;
+}
+
+function reserveOtpRequest(req, email, now = Date.now()) {
+  if (otpRequestWindows.size > 10000) {
+    for (const [key, state] of otpRequestWindows) {
+      if (now - state.windowStartedAt >= OTP_REQUEST_WINDOW_MS) otpRequestWindows.delete(key);
+    }
+  }
+
+  const remoteAddress = (req.ip || req.socket?.remoteAddress || 'unknown').toString().slice(0, 128);
+  const rules = [
+    { key: `email:${email}`, maximum: OTP_MAX_EMAIL_REQUESTS, cooldown: OTP_RESEND_COOLDOWN_MS },
+    { key: `ip:${remoteAddress}`, maximum: OTP_MAX_IP_REQUESTS, cooldown: 0 },
+  ];
+  const states = rules.map((rule) => ({ rule, state: otpWindowState(rule.key, now) }));
+
+  for (const { rule, state } of states) {
+    const cooldownRemaining = rule.cooldown - (now - state.lastRequestAt);
+    if (state.lastRequestAt && cooldownRemaining > 0) {
+      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(cooldownRemaining / 1000)) };
+    }
+    if (state.count >= rule.maximum) {
+      const windowRemaining = OTP_REQUEST_WINDOW_MS - (now - state.windowStartedAt);
+      return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil(windowRemaining / 1000)) };
+    }
+  }
+
+  for (const { rule, state } of states) {
+    otpRequestWindows.set(rule.key, {
+      count: state.count + 1,
+      windowStartedAt: state.windowStartedAt,
+      lastRequestAt: now,
+    });
+  }
+  return { allowed: true, retryAfterSeconds: 0 };
+}
+
+function sendRateLimitResponse(res, result, message = 'Too many verification-code requests') {
+  res.setHeader('Retry-After', String(result.retryAfterSeconds));
+  return res.status(429).json({
+    error: message,
+    retryAfterSeconds: result.retryAfterSeconds,
+  });
+}
+
 function getMailTransporter() {
   const host = (process.env.SMTP_HOST ?? process.env.EMAIL_HOST ?? '').trim();
   const user = (process.env.SMTP_USER ?? process.env.EMAIL_USER ?? '').trim();
@@ -463,23 +621,29 @@ async function sendVerificationMail({ email, name, code }) {
   const text = `Hi ${name || 'there'},\n\nYour verification code is: ${code}\n\nThis code expires in 10 minutes.\nIf you did not request this code, you can ignore this message.`;
 
   if (!transporter) {
-    console.log(`[auth] verification code for ${email}: ${code}`);
-    return { delivery: 'mock' };
+    if (isDevelopmentMode()) {
+      console.warn(`[auth] SMTP is not configured; using a local verification preview for ${email}`);
+      return { delivery: 'mock' };
+    }
+    throw publicDeliveryError('Verification email service is not configured');
   }
 
-   try {
-     await transporter.sendMail({
-       from,
-       to: email,
-       subject,
-       text,
-     });
-     console.log(`[auth] email sent successfully to ${email}`);
-     return { delivery: 'email' };
-   } catch (err) {
-     console.error(`[auth] email send failed for ${email}:`, err.message);
-     console.log(`[auth] falling back to mock mode, verification code: ${code}`);
-     return { delivery: 'mock', code };
+  try {
+    await transporter.sendMail({
+      from,
+      to: email,
+      subject,
+      text,
+    });
+    console.log(`[auth] email sent successfully to ${email}`);
+    return { delivery: 'email' };
+  } catch (err) {
+    console.error(`[auth] email send failed for ${email}:`, err.message);
+    if (isDevelopmentMode()) {
+      console.warn(`[auth] using a local verification preview for ${email}`);
+      return { delivery: 'mock' };
+    }
+    throw publicDeliveryError('Verification email could not be sent', 502);
   }
 }
 
@@ -491,7 +655,10 @@ async function findUserByEmail(email) {
 
 async function findPendingSignup(email) {
   const normalized = normalizeEmail(email);
-  const [rows] = await db.query('SELECT * FROM otp_verifications WHERE email = ? ORDER BY created_at DESC LIMIT 1', [normalized]);
+  const [rows] = await db.query(
+    'SELECT * FROM otp_verifications WHERE email = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+    [normalized]
+  );
   return rows[0] || null;
 }
 
@@ -500,33 +667,170 @@ async function removePendingSignup(email) {
   await db.query('DELETE FROM otp_verifications WHERE email = ?', [normalized]);
 }
 
+async function removePendingSignupById(id) {
+  await db.query('DELETE FROM otp_verifications WHERE id = ?', [id]);
+}
+
 function isSignupCodeExpired(signup, now = new Date()) {
   if (!signup) return true;
   return new Date(signup.expires_at) <= now;
 }
 
 async function stampSignupCode(email, otp, now = new Date()) {
-  const expiresAt = new Date(now.getTime() + 10 * 60 * 1000); // 10 mins
-  await db.query(
+  const expiresAt = new Date(now.getTime() + OTP_TTL_MS);
+  const [result] = await db.query(
     'INSERT INTO otp_verifications (email, otp, expires_at) VALUES (?, ?, ?)',
     [email, otp, expiresAt]
   );
+  return { id: result.insertId, expiresAt };
 }
 
-function sendSignupResponse(res, signup, delivery, code) {
-  const now = Date.now();
-  return res.json({
+function otpDeliveryResponse(email, delivery, code, expiresAt) {
+  const response = {
     ok: true,
-    nextStep: signup.codeVerified ? 'set-password' : 'verify-code',
-    email: signup.email,
-    name: signup.name,
-    codeExpiresAt: signup.codeExpiresAt || 0,
-    resendAvailableAt: signup.resendAvailableAt || 0,
-    expiresInMinutes: Math.max(1, Math.ceil(((signup.codeExpiresAt || now) - now) / 60000)),
-    resendAfterSeconds: Math.max(0, Math.ceil(((signup.resendAvailableAt || now) - now) / 1000)),
+    nextStep: 'verify-code',
+    email,
     delivery: delivery.delivery,
-    previewCode: delivery.delivery === 'mock' ? code : undefined,
-  });
+    codeExpiresAt: expiresAt.toISOString(),
+    expiresInMinutes: Math.ceil(OTP_TTL_MS / 60000),
+    resendAfterSeconds: Math.ceil(OTP_RESEND_COOLDOWN_MS / 1000),
+  };
+  if (isDevelopmentMode() && delivery.delivery === 'mock') {
+    response.previewCode = code;
+    response.code = code;
+  }
+  return response;
+}
+
+async function issueSignupCode({ email, name }) {
+  const code = generateVerificationCode();
+  const stamped = await stampSignupCode(email, code);
+  try {
+    const delivery = await sendVerificationMail({ email, name, code });
+    return otpDeliveryResponse(email, delivery, code, stamped.expiresAt);
+  } catch (err) {
+    try {
+      await removePendingSignupById(stamped.id);
+    } catch (cleanupErr) {
+      console.error('[auth] failed to remove undelivered verification code:', cleanupErr.message);
+    }
+    throw err;
+  }
+}
+
+function resendCooldownSeconds(signup, now = Date.now()) {
+  const createdAt = new Date(signup?.created_at).getTime();
+  if (!Number.isFinite(createdAt)) return 0;
+  return Math.max(0, Math.ceil((createdAt + OTP_RESEND_COOLDOWN_MS - now) / 1000));
+}
+
+async function getOtpAttemptStatus(email, now = new Date()) {
+  const [rows] = await db.query(
+    'SELECT failed_attempts, window_start, blocked_until FROM otp_attempt_limits WHERE email = ?',
+    [email]
+  );
+  const row = rows[0];
+  if (!row) return { blocked: false, failedAttempts: 0, retryAfterSeconds: 0 };
+
+  const blockedUntil = row.blocked_until ? new Date(row.blocked_until) : null;
+  if (blockedUntil && blockedUntil > now) {
+    return {
+      blocked: true,
+      failedAttempts: Number(row.failed_attempts) || 0,
+      retryAfterSeconds: Math.max(1, Math.ceil((blockedUntil - now) / 1000)),
+    };
+  }
+
+  const windowStart = row.window_start ? new Date(row.window_start) : null;
+  if (!windowStart || blockedUntil || now - windowStart >= OTP_ATTEMPT_WINDOW_MS) {
+    return { blocked: false, failedAttempts: 0, retryAfterSeconds: 0 };
+  }
+
+  return {
+    blocked: false,
+    failedAttempts: Number(row.failed_attempts) || 0,
+    retryAfterSeconds: 0,
+  };
+}
+
+async function recordFailedOtpAttempt(email, now = new Date()) {
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.query(
+      'SELECT failed_attempts, window_start, blocked_until FROM otp_attempt_limits WHERE email = ? FOR UPDATE',
+      [email]
+    );
+    const row = rows[0];
+    const existingBlock = row?.blocked_until ? new Date(row.blocked_until) : null;
+    if (existingBlock && existingBlock > now) {
+      await connection.commit();
+      return {
+        blocked: true,
+        failedAttempts: Number(row.failed_attempts) || OTP_MAX_FAILED_ATTEMPTS,
+        retryAfterSeconds: Math.max(1, Math.ceil((existingBlock - now) / 1000)),
+      };
+    }
+
+    const existingWindowStart = row?.window_start ? new Date(row.window_start) : null;
+    const windowExpired = !existingWindowStart
+      || existingBlock
+      || now - existingWindowStart >= OTP_ATTEMPT_WINDOW_MS;
+    const failedAttempts = windowExpired ? 1 : (Number(row.failed_attempts) || 0) + 1;
+    const windowStart = windowExpired ? now : existingWindowStart;
+    const blockedUntil = failedAttempts >= OTP_MAX_FAILED_ATTEMPTS
+      ? new Date(now.getTime() + OTP_BLOCK_MS)
+      : null;
+
+    if (row) {
+      await connection.query(
+        `UPDATE otp_attempt_limits
+         SET failed_attempts = ?, window_start = ?, blocked_until = ?
+         WHERE email = ?`,
+        [failedAttempts, windowStart, blockedUntil, email]
+      );
+    } else {
+      await connection.query(
+        `INSERT INTO otp_attempt_limits (email, failed_attempts, window_start, blocked_until)
+         VALUES (?, ?, ?, ?)`,
+        [email, failedAttempts, windowStart, blockedUntil]
+      );
+    }
+    await connection.commit();
+
+    return {
+      blocked: Boolean(blockedUntil),
+      failedAttempts,
+      retryAfterSeconds: blockedUntil ? Math.ceil(OTP_BLOCK_MS / 1000) : 0,
+    };
+  } catch (err) {
+    try {
+      await connection.rollback();
+    } catch (rollbackErr) {
+      console.error('[auth] OTP attempt rollback failed:', rollbackErr.message);
+    }
+    throw err;
+  } finally {
+    connection.release();
+  }
+}
+
+async function clearOtpAttempts(email) {
+  await db.query('DELETE FROM otp_attempt_limits WHERE email = ?', [email]);
+}
+
+function isValidPassword(password) {
+  return typeof password === 'string'
+    && password.length >= 8
+    && Buffer.byteLength(password, 'utf8') <= 72;
+}
+
+function otpMatches(expected, received) {
+  if (typeof expected !== 'string' || !/^\d{6}$/.test(received)) return false;
+  const expectedBuffer = Buffer.from(expected);
+  const receivedBuffer = Buffer.from(received);
+  return expectedBuffer.length === receivedBuffer.length
+    && crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
 }
 
 function createSession(user) {
@@ -551,7 +855,7 @@ async function currentUserFromRequest(req) {
   if (!token) return null;
   const session = sessionTokens.get(token);
   if (!session) return null;
-  
+
   const [rows] = await db.query('SELECT * FROM users WHERE id = ?', [session.userId]);
   return rows[0] || null;
 }
@@ -591,50 +895,56 @@ app.post('/api/auth/signup/start', async (req, res) => {
     const name = normalizeDisplayName(req.body?.name);
     const email = normalizeEmail(req.body?.email);
 
-    if (!name) return res.status(400).json({ error: 'name is required' });
-    if (!email || !email.includes('@')) return res.status(400).json({ error: 'valid email is required' });
+    if (!name || name.length > 100) return res.status(400).json({ error: 'name is required and must be at most 100 characters' });
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'valid email is required' });
+    }
+
+    const rateLimit = reserveOtpRequest(req, email);
+    if (!rateLimit.allowed) return sendRateLimitResponse(res, rateLimit);
 
     if (await findUserByEmail(email)) {
       return res.status(409).json({ error: 'An account already exists with this email' });
     }
 
-    const code = generateVerificationCode();
-    await stampSignupCode(email, code);
-
-    const delivery = await sendVerificationMail({ email, name, code });
-    return res.json({ 
-      ok: true, 
-      nextStep: 'verify-code', 
-      email, 
-      delivery: delivery.delivery, 
-      previewCode: delivery.delivery === 'mock' ? code : undefined,
-      code: (process.env.NODE_ENV === 'development' || delivery.delivery === 'mock' ? code : undefined) 
-    });
+    return res.json(await issueSignupCode({ email, name }));
   } catch (err) {
-    res.status(500).json({ error: 'Signup failed' });
+    console.error('[auth] signup start failed:', err.message);
+    const status = Number.isInteger(err.statusCode) ? err.statusCode : 500;
+    res.status(status).json({ error: err.isPublic ? err.message : 'Signup failed' });
   }
 });
 
 app.post('/api/auth/signup/resend', async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
-    if (!email || !email.includes('@')) return res.status(400).json({ error: 'valid email is required' });
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'valid email is required' });
+    }
+
+    const rateLimit = reserveOtpRequest(req, email);
+    if (!rateLimit.allowed) return sendRateLimitResponse(res, rateLimit);
 
     const signup = await findPendingSignup(email);
-    const code = generateVerificationCode();
-    await stampSignupCode(email, code);
+    if (!signup) return res.status(404).json({ error: 'No signup request found' });
+    if (signup.verified && !isSignupCodeExpired(signup)) {
+      return res.status(409).json({ error: 'Code already verified; set your password' });
+    }
 
-    const delivery = await sendVerificationMail({ email, name: signup?.name || 'User', code });
-    return res.json({ 
-      ok: true, 
-      nextStep: 'verify-code', 
-      email, 
-      delivery: delivery.delivery, 
-      previewCode: delivery.delivery === 'mock' ? code : undefined,
-      code: (process.env.NODE_ENV === 'development' || delivery.delivery === 'mock' ? code : undefined) 
-    });
+    const cooldown = resendCooldownSeconds(signup);
+    if (cooldown > 0) {
+      return sendRateLimitResponse(
+        res,
+        { retryAfterSeconds: cooldown },
+        'Please wait before requesting another verification code'
+      );
+    }
+
+    return res.json(await issueSignupCode({ email, name: 'User' }));
   } catch (err) {
-    res.status(500).json({ error: 'Resend failed' });
+    console.error('[auth] signup resend failed:', err.message);
+    const status = Number.isInteger(err.statusCode) ? err.statusCode : 500;
+    res.status(status).json({ error: err.isPublic ? err.message : 'Resend failed' });
   }
 });
 
@@ -643,13 +953,32 @@ app.post('/api/auth/signup/verify-code', async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const code = (req.body?.code ?? '').toString().trim();
 
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'valid email is required' });
+    }
+
+    const attemptStatus = await getOtpAttemptStatus(email);
+    if (attemptStatus.blocked) {
+      return sendRateLimitResponse(res, attemptStatus, 'Too many invalid verification attempts');
+    }
+
     const signup = await findPendingSignup(email);
     if (!signup) return res.status(404).json({ error: 'No signup request found' });
 
     if (isSignupCodeExpired(signup)) return res.status(410).json({ error: 'Code expired' });
-    if (signup.otp !== code) return res.status(400).json({ error: 'Invalid code' });
+    if (!otpMatches(String(signup.otp), code)) {
+      const failedStatus = await recordFailedOtpAttempt(email);
+      if (failedStatus.blocked) {
+        return sendRateLimitResponse(res, failedStatus, 'Too many invalid verification attempts');
+      }
+      return res.status(400).json({
+        error: 'Invalid code',
+        attemptsRemaining: OTP_MAX_FAILED_ATTEMPTS - failedStatus.failedAttempts,
+      });
+    }
 
     await db.query('UPDATE otp_verifications SET verified = 1 WHERE id = ?', [signup.id]);
+    await clearOtpAttempts(email);
     res.json({ ok: true, nextStep: 'set-password', email });
   } catch (err) { res.status(500).json({ error: 'Verify failed' }); }
 });
@@ -657,21 +986,42 @@ app.post('/api/auth/signup/verify-code', async (req, res) => {
 app.post('/api/auth/signup/set-password', async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
-    const { password, name } = req.body;
+    const { password, confirmPassword, name } = req.body ?? {};
+
+    if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'valid email is required' });
+    }
+    if (!isValidPassword(password)) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters and at most 72 UTF-8 bytes' });
+    }
+    if (confirmPassword !== undefined && confirmPassword !== password) {
+      return res.status(400).json({ error: 'Passwords do not match' });
+    }
 
     const signup = await findPendingSignup(email);
     if (!signup || !signup.verified) return res.status(400).json({ error: 'Please verify code first' });
+    if (isSignupCodeExpired(signup)) return res.status(410).json({ error: 'Verification expired; request a new code' });
+
+    if (await findUserByEmail(email)) {
+      return res.status(409).json({ error: 'An account already exists with this email' });
+    }
+
+    const normalizedName = normalizeDisplayName(name) || 'User';
+    if (normalizedName.length > 100) {
+      return res.status(400).json({ error: 'name must be at most 100 characters' });
+    }
 
     const hash = await hashPassword(password);
     const [result] = await db.query(
       'INSERT INTO users (name, email, password_hash, is_verified) VALUES (?, ?, ?, 1)',
-      [name || 'User', email, hash]
+      [normalizedName, email, hash]
     );
 
-    const user = { id: result.insertId, name: name || 'User', email, role: 'user' };
+    const user = { id: result.insertId, name: normalizedName, email, role: 'user' };
     const token = createSession(user);
 
     await removePendingSignup(email);
+    await clearOtpAttempts(email);
     res.json({ ok: true, token, user: publicUser(user) });
   } catch (err) { res.status(500).json({ error: 'Set password failed' }); }
 });
@@ -891,13 +1241,13 @@ app.get('/api/reviews', async (req, res) => {
   try {
     const { spotId, destinationName } = req.query;
     let query = `
-      SELECT r.*, u.name as userName, u.profile_pic as userAvatar, s.name as spotName 
-      FROM reviews r 
+      SELECT r.*, u.name as userName, u.profile_pic as userAvatar, s.name as spotName
+      FROM reviews r
       LEFT JOIN users u ON r.user_id = u.id
       LEFT JOIN spots s ON r.spot_id = s.id
     `;
     let params = [];
-    
+
     if (spotId) {
       query += ' WHERE r.spot_id = ?';
       params.push(spotId);
@@ -921,7 +1271,7 @@ app.post('/api/reviews', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'sign in required' });
 
     let { spotId, destinationName, rating, text } = req.body;
-    
+
     if (!spotId && !destinationName) return res.status(400).json({ error: 'spotId or destinationName is required' });
     if (!rating || rating < 1 || rating > 5) return res.status(400).json({ error: 'invalid rating' });
 
@@ -957,15 +1307,15 @@ app.post('/api/reviews', async (req, res) => {
 
 
 app.get('/api/site-content', (req, res) => {
-  return res.json({ 
-    ok: true, 
+  return res.json({
+    ok: true,
     content: {
       aboutUs: 'Exploring the beauty of Bangladesh.',
       contactUs: 'contact@torisom.com',
       travelGuide: 'Pack light and stay hydrated.',
       faqs: [],
       budgets: {}
-    } 
+    }
   });
 });
 
@@ -1017,10 +1367,10 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
 app.get('/api/admin/spots', requireAdmin, async (req, res) => {
   try {
     const [rows] = await db.query(`
-      SELECT s.*, d.name as district_name, dv.name as division_name 
-      FROM spots s 
-      LEFT JOIN districts d ON s.district_id = d.id 
-      LEFT JOIN divisions dv ON s.division_id = dv.id 
+      SELECT s.*, d.name as district_name, dv.name as division_name
+      FROM spots s
+      LEFT JOIN districts d ON s.district_id = d.id
+      LEFT JOIN divisions dv ON s.division_id = dv.id
       ORDER BY s.id DESC
     `);
     res.json({ spots: rows });
@@ -1177,10 +1527,10 @@ app.delete('/api/admin/guides/:id', requireAdmin, async (req, res) => {
 app.get('/api/admin/reviews', requireAdmin, async (req, res) => {
   try {
     const [rows] = await db.query(`
-      SELECT r.*, u.name as user_name, s.name as spot_name 
-      FROM reviews r 
-      LEFT JOIN users u ON r.user_id = u.id 
-      LEFT JOIN spots s ON r.spot_id = s.id 
+      SELECT r.*, u.name as user_name, s.name as spot_name
+      FROM reviews r
+      LEFT JOIN users u ON r.user_id = u.id
+      LEFT JOIN spots s ON r.spot_id = s.id
       ORDER BY r.created_at DESC
     `);
     res.json({ reviews: rows });
@@ -1247,33 +1597,34 @@ app.get('/api/user/dashboard', requireAuth, async (req, res) => {
     const [sc] = await db.query('SELECT COUNT(*) as count FROM saved_spots WHERE user_id = ?', [user.id]);
     const [bc] = await db.query('SELECT COUNT(*) as count FROM bookings WHERE user_id = ? AND status != "cancelled"', [user.id]);
     const [rr] = await db.query(`
-      SELECT r.*, s.name as spot_name 
-      FROM reviews r 
-      LEFT JOIN spots s ON r.spot_id = s.id 
-      WHERE r.user_id = ? 
+      SELECT r.*, s.name as spot_name
+      FROM reviews r
+      LEFT JOIN spots s ON r.spot_id = s.id
+      WHERE r.user_id = ?
       ORDER BY r.created_at DESC LIMIT 5
     `, [user.id]);
     const [rs] = await db.query(`
-      SELECT s.*, d.name as district_name 
-      FROM saved_spots ss 
-      JOIN spots s ON ss.spot_id = s.id 
+      SELECT s.*, d.name as district_name, dv.name as division_name
+      FROM saved_spots ss
+      JOIN spots s ON ss.spot_id = s.id
       LEFT JOIN districts d ON s.district_id = d.id
-      WHERE ss.user_id = ? 
+      LEFT JOIN divisions dv ON d.division_id = dv.id
+      WHERE ss.user_id = ?
       ORDER BY ss.created_at DESC LIMIT 5
     `, [user.id]);
     const [rb] = await db.query(`
-      SELECT b.*, s.name as spot_name 
-      FROM bookings b 
-      LEFT JOIN spots s ON b.spot_id = s.id 
-      WHERE b.user_id = ? 
+      SELECT b.*, s.name as spot_name
+      FROM bookings b
+      LEFT JOIN spots s ON b.spot_id = s.id
+      WHERE b.user_id = ?
       ORDER BY b.created_at DESC LIMIT 5
     `, [user.id]);
-    
-    res.json({ 
-      reviewCount: rc[0].count, 
-      savedCount: sc[0].count, 
+
+    res.json({
+      reviewCount: rc[0].count,
+      savedCount: sc[0].count,
       bookingCount: bc[0].count,
-      recentReviews: rr, 
+      recentReviews: rr,
       recentSaved: rs,
       recentBookings: rb
     });
@@ -1284,10 +1635,10 @@ app.get('/api/user/reviews', requireAuth, async (req, res) => {
   try {
     const user = await currentUserFromRequest(req);
     const [rows] = await db.query(`
-      SELECT r.*, s.name as spot_name 
-      FROM reviews r 
-      LEFT JOIN spots s ON r.spot_id = s.id 
-      WHERE r.user_id = ? 
+      SELECT r.*, s.name as spot_name
+      FROM reviews r
+      LEFT JOIN spots s ON r.spot_id = s.id
+      WHERE r.user_id = ?
       ORDER BY r.created_at DESC
     `, [user.id]);
     res.json({ reviews: rows });
@@ -1298,15 +1649,46 @@ app.get('/api/user/saved-spots', requireAuth, async (req, res) => {
   try {
     const user = await currentUserFromRequest(req);
     const [rows] = await db.query(`
-      SELECT s.*, d.name as district_name 
-      FROM saved_spots ss 
-      JOIN spots s ON ss.spot_id = s.id 
+      SELECT s.*, d.name as district_name, dv.name as division_name
+      FROM saved_spots ss
+      JOIN spots s ON ss.spot_id = s.id
       LEFT JOIN districts d ON s.district_id = d.id
-      WHERE ss.user_id = ? 
+      LEFT JOIN divisions dv ON d.division_id = dv.id
+      WHERE ss.user_id = ?
       ORDER BY ss.created_at DESC
     `, [user.id]);
     res.json({ spots: rows });
   } catch (err) { res.status(500).json({ error: 'Saved spots failed' }); }
+});
+
+app.post('/api/user/saved-spots', requireAuth, async (req, res) => {
+  try {
+    const user = await currentUserFromRequest(req);
+    const spotId = parsePositiveInteger(req.body?.spot_id);
+    if (!spotId) return res.status(400).json({ error: 'spot_id must be a positive integer' });
+
+    const [spotRows] = await db.query('SELECT id, name FROM spots WHERE id = ?', [spotId]);
+    if (spotRows.length === 0) return res.status(404).json({ error: 'Spot not found' });
+
+    try {
+      const [result] = await db.query(
+        'INSERT INTO saved_spots (user_id, spot_id) VALUES (?, ?)',
+        [user.id, spotId]
+      );
+      return res.status(201).json({
+        ok: true,
+        created: true,
+        savedSpotId: result.insertId,
+        spot: spotRows[0],
+      });
+    } catch (err) {
+      if (err.code !== 'ER_DUP_ENTRY') throw err;
+      return res.json({ ok: true, created: false, spot: spotRows[0] });
+    }
+  } catch (err) {
+    console.error('Save spot error:', err);
+    res.status(500).json({ error: 'Save spot failed' });
+  }
 });
 
 
@@ -1317,12 +1699,12 @@ app.get('/api/user/guides', requireAuth, async (req, res) => {
     // Return guides for spots the user has saved (robust against duplicate spots with slightly different names)
     const [savedGuides] = await db.query(`
       SELECT DISTINCT g.*, s.name as spot_name, 1 as is_saved_spot
-      FROM guides g 
+      FROM guides g
       JOIN spots s ON g.spot_id = s.id
       JOIN saved_spots ss ON ss.user_id = ?
       JOIN spots s2 ON ss.spot_id = s2.id
       WHERE g.spot_id = ss.spot_id
-         OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(s.name, ' ', ''), 'Beach', ''), 'Sea', ''), 'Island', '')) = 
+         OR LOWER(REPLACE(REPLACE(REPLACE(REPLACE(s.name, ' ', ''), 'Beach', ''), 'Sea', ''), 'Island', '')) =
             LOWER(REPLACE(REPLACE(REPLACE(REPLACE(s2.name, ' ', ''), 'Beach', ''), 'Sea', ''), 'Island', ''))
       ORDER BY g.rating DESC
     `, [user.id]);
@@ -1335,10 +1717,10 @@ app.get('/api/user/bookings', requireAuth, async (req, res) => {
   try {
     const user = await currentUserFromRequest(req);
     const [rows] = await db.query(`
-      SELECT b.*, s.name as spot_name 
-      FROM bookings b 
-      LEFT JOIN spots s ON b.spot_id = s.id 
-      WHERE b.user_id = ? 
+      SELECT b.*, s.name as spot_name
+      FROM bookings b
+      LEFT JOIN spots s ON b.spot_id = s.id
+      WHERE b.user_id = ?
       ORDER BY b.created_at DESC
     `, [user.id]);
     res.json({ bookings: rows });
@@ -1349,22 +1731,30 @@ app.get('/api/user/bookings', requireAuth, async (req, res) => {
 app.post('/api/bookings', requireAuth, async (req, res) => {
   try {
     const user = await currentUserFromRequest(req);
-    const { spot_id, booking_date, persons, price: customPrice } = req.body;
+    const { spot_id, booking_date, persons } = req.body ?? {};
+    const spotId = parsePositiveInteger(spot_id);
+    const numPersons = parsePositiveInteger(persons);
 
-    if (!spot_id) return res.status(400).json({ error: 'spot_id is required' });
-    if (!booking_date) return res.status(400).json({ error: 'booking_date is required' });
-
-    const numPersons = parseInt(persons) || 1;
+    if (!spotId) return res.status(400).json({ error: 'spot_id must be a positive integer' });
+    if (!numPersons || numPersons > MAX_BOOKING_PERSONS) {
+      return res.status(400).json({ error: `persons must be an integer between 1 and ${MAX_BOOKING_PERSONS}` });
+    }
+    if (!isValidDateOnly(booking_date)) {
+      return res.status(400).json({ error: 'booking_date must be a valid date in YYYY-MM-DD format' });
+    }
+    if (booking_date <= currentDateInTimeZone(BOOKING_TIME_ZONE)) {
+      return res.status(400).json({ error: 'booking_date must be a future date' });
+    }
 
     // Look up spot
-    const [spotRows] = await db.query('SELECT id, name, budget_category FROM spots WHERE id = ?', [spot_id]);
+    const [spotRows] = await db.query('SELECT id, name, budget_category FROM spots WHERE id = ?', [spotId]);
     if (spotRows.length === 0) return res.status(404).json({ error: 'Spot not found' });
     const spot = spotRows[0];
 
     // Prevent duplicate active booking for same user + spot + date
     const [existing] = await db.query(
       "SELECT id FROM bookings WHERE user_id = ? AND spot_id = ? AND booking_date = ? AND status != 'cancelled'",
-      [user.id, spot_id, booking_date]
+      [user.id, spotId, booking_date]
     );
     if (existing.length > 0) {
       return res.status(409).json({ error: 'You already have an active booking for this spot on this date.' });
@@ -1372,16 +1762,16 @@ app.post('/api/bookings', requireAuth, async (req, res) => {
 
     // Calculate estimated price based on budget category and persons
     const baseRate = spot.budget_category === 'High' ? 1700 : (spot.budget_category === 'Mid' ? 1250 : 800);
-    const price = parseInt(customPrice) || (baseRate * numPersons);
+    const price = baseRate * numPersons;
 
     const [result] = await db.query(
-      "INSERT INTO bookings (user_id, spot_id, type, target_name, price, booking_date, status) VALUES (?, ?, 'package', ?, ?, ?, 'confirmed')",
-      [user.id, spot_id, spot.name, price, booking_date]
+      "INSERT INTO bookings (user_id, spot_id, type, target_name, price, booking_date, persons, status) VALUES (?, ?, 'package', ?, ?, ?, ?, 'confirmed')",
+      [user.id, spotId, spot.name, price, booking_date, numPersons]
     );
 
-    res.json({ 
-      ok: true, 
-      id: result.insertId, 
+    res.status(201).json({
+      ok: true,
+      id: result.insertId,
       message: `Booking confirmed for ${spot.name} on ${booking_date}`,
       booking: {
         id: result.insertId,
@@ -1421,16 +1811,16 @@ app.delete('/api/user/bookings/:id', requireAuth, async (req, res) => {
       const todayDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
       if (bookingDateOnly < todayDateOnly) {
-        return res.status(400).json({ 
-          error: 'Booking date has already passed. Completed bookings cannot be cancelled.' 
+        return res.status(400).json({
+          error: 'Booking date has already passed. Completed bookings cannot be cancelled.'
         });
       }
 
       const hoursUntilBooking = (bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60);
 
       if (hoursUntilBooking < 24) {
-        return res.status(400).json({ 
-          error: 'Cancellation is not allowed within 24 hours of the booking date.' 
+        return res.status(400).json({
+          error: 'Cancellation is not allowed within 24 hours of the booking date.'
         });
       }
     }
@@ -1456,7 +1846,10 @@ app.put('/api/auth/profile', requireAuth, upload.single('profile_pic'), async (r
       params.push(profile_pic);
     }
 
-    if (password) {
+    if (password !== undefined && password !== '') {
+      if (!isValidPassword(password)) {
+        return res.status(400).json({ error: 'Password must be at least 8 characters and at most 72 UTF-8 bytes' });
+      }
       const hash = await hashPassword(password);
       query += ', password_hash=?';
       params.push(hash);
@@ -1466,7 +1859,7 @@ app.put('/api/auth/profile', requireAuth, upload.single('profile_pic'), async (r
     params.push(user.id);
 
     await db.query(query, params);
-    
+
     const [updated] = await db.query('SELECT * FROM users WHERE id = ?', [user.id]);
     res.json({ ok: true, user: publicUser(updated[0]) });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1497,12 +1890,55 @@ app.delete('/api/user/saved-spots/:id', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Delete failed' }); }
 });
 
+app.use((err, req, res, next) => {
+  if (err?.code === 'INVALID_IMAGE_TYPE') {
+    return res.status(400).json({ error: err.message });
+  }
+  if (err instanceof multer.MulterError) {
+    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    const message = err.code === 'LIMIT_FILE_SIZE'
+      ? 'Image must be 5 MB or smaller'
+      : 'Invalid image upload';
+    return res.status(status).json({ error: message, code: err.code });
+  }
+  return next(err);
+});
+
 const seedDatabase = require('./seed');
 
-app.listen(PORT, () => {
-  console.log(`API server listening on http://localhost:${PORT}`);
-  // Run database synchronization seeder
-  seedDatabase().catch(err => {
-    console.error('[startup] Failed to seed database:', err);
-  });
-});
+async function ensureOtpAttemptSecurityTable() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS otp_attempt_limits (
+      email VARCHAR(255) NOT NULL,
+      failed_attempts INT NOT NULL DEFAULT 0,
+      window_start TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      blocked_until TIMESTAMP NULL DEFAULT NULL,
+      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (email)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+  `);
+}
+
+async function startServer() {
+  try {
+    await seedDatabase();
+    await ensureOtpAttemptSecurityTable();
+    app.listen(PORT, () => {
+      console.log(`API server listening on http://localhost:${PORT}`);
+    });
+  } catch (err) {
+    console.error('[startup] Database initialization failed; API server was not started:', err);
+    try {
+      await db.end();
+    } catch (closeErr) {
+      console.error('[startup] Failed to close the database pool:', closeErr);
+    }
+    process.exitCode = 1;
+  }
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer };
