@@ -1,10 +1,10 @@
-🌏 FarReach — Bangladesh Tourism Explorer
+# 🌏 FarReach — Bangladesh Tourism Explorer
 
-An android application for exploring tourist destinations across Bangladesh. Discover 100+ destinations, check real-time weather, book trips, read & write reviews, and manage everything from a powerful admin dashboard.
+A full-stack web and Flutter Android application for exploring tourist destinations across Bangladesh. Discover destinations, check weather, save places, book trips, and manage travel from a responsive Material 3 mobile experience or the existing web app.
 
 ![Node.js](https://img.shields.io/badge/Node.js-v18+-green?logo=node.js)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0-blue?logo=mysql)
-
+![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ---
 
@@ -43,19 +43,46 @@ An android application for exploring tourist destinations across Bangladesh. Dis
 
 | Layer | Technology |
 |-------|-----------|
+| **Android app** | Flutter, Dart, Material 3 |
 | **Frontend** | HTML5, CSS3, Vanilla JavaScript |
 | **Backend** | Node.js, Express.js |
 | **Database** | MySQL 8.0 |
 | **Maps** | Google Maps API, Leaflet.js |
 | **Weather** | OpenWeather API, Open-Meteo API |
 | **Email** | Nodemailer (Gmail SMTP) |
-| **Auth** | JWT + OTP Email Verification |
+| **Auth** | Server-side session tokens + OTP Email Verification |
 | **File Upload** | Multer |
 
 ---
 
 ## 📁 Project Structure
 
+```
+FarReach-App/
+├── index.html              # Main homepage
+├── destination.html        # Destination detail page
+├── destination.js          # Destination page logic
+├── admin-dashboard.html    # Admin panel
+├── user-dashboard.html     # User panel
+├── dashboard.css           # Dashboard styles
+├── script.js               # Main site logic (spots, map, filters)
+├── auth.js                 # Authentication (login/signup/OTP)
+├── styles.css              # Main site styles
+├── .env                    # Root environment config
+├── server/
+│   ├── index.js            # Express server & all API routes
+│   ├── db.js               # MySQL connection pool
+│   ├── database.sql        # Database schema dump
+│   ├── .env                # Server environment config
+│   ├── .env.example        # Environment template
+│   └── package.json        # Node.js dependencies
+├── mobile/                 # Flutter Android app
+│   ├── lib/                # UI, state, API client & local cache
+│   ├── assets/images/      # Offline destination photography
+│   ├── test/               # Model, API, widget & golden tests
+│   └── android/            # Android Gradle project
+└── spot-pictures/          # Uploaded spot images
+```
 
 ---
 
@@ -66,6 +93,8 @@ An android application for exploring tourist destinations across Bangladesh. Dis
 - **Node.js** v18 or higher
 - **MySQL** 8.0 or higher
 - **npm** (comes with Node.js)
+- **Flutter** stable and Android SDK (for the mobile app)
+- **VS Code** with the Dart and Flutter extensions
 
 ### 1. Clone the Repository
 
@@ -98,6 +127,9 @@ cp server/.env.example server/.env
 Edit `server/.env` with your values:
 
 ```env
+# Local-only OTP preview. Use production with working SMTP when deployed.
+NODE_ENV=development
+
 # Database
 DB_HOST=localhost
 DB_USER=root
@@ -106,6 +138,7 @@ DB_NAME=torisom_db
 
 # Server
 PORT=3000
+APP_API_BASE_URL=http://127.0.0.1:3000
 
 # Email (Gmail SMTP for OTP verification)
 SMTP_HOST=smtp.gmail.com
@@ -136,6 +169,39 @@ node index.js
 ```
 
 The app will be running at **http://localhost:3000**
+
+### 6. Run the Flutter Android App in VS Code
+
+Open the `mobile` folder in VS Code, select an Android device, then run:
+
+```bash
+cd mobile
+flutter pub get
+flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3000
+```
+
+`10.0.2.2` reaches the host machine from the Android emulator. For a physical Android device, keep the phone and computer on the same network and replace it with the computer's LAN address, for example `http://192.168.0.10:3000`. The API server must be running and allowed through the firewall.
+
+Release builds deliberately do not fall back to the emulator URL. Supply an explicit HTTPS endpoint, for example:
+
+```bash
+flutter build appbundle --release --dart-define=API_BASE_URL=https://api.example.com
+```
+
+Without that setting, the release app remains usable as an offline guide while live account, weather, hotel, and booking calls fail safely. Configure a private release keystore outside source control before publishing.
+
+The app keeps a built-in Bangladesh destination catalog and local saved list, so browsing still works when the API is offline. Account sync, live weather, and booking require the API.
+
+Run checks and build an installable debug APK with:
+
+```bash
+cd mobile
+flutter analyze
+flutter test
+flutter build apk --debug
+```
+
+The APK is written to `mobile/build/app/outputs/flutter-apk/app-debug.apk`.
 
 ---
 
@@ -187,21 +253,26 @@ The app will be running at **http://localhost:3000**
 | GET | `/api/reviews?destinationName=...` | Get reviews for a destination |
 | GET | `/api/weather?district=...` | Current weather for a district |
 | GET | `/api/forecast?district=...&date=...` | Weather forecast |
-| GET | `/api/hotels/search` | Search hotels by city |
+| POST | `/api/hotels/search` | Search hotels with `{city, destinationName, category, checkin, checkout}` |
 | GET | `/api/site-content` | Site content & settings |
 
 ### Authentication
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/auth/signup` | Register with email + OTP |
-| POST | `/api/auth/verify-signup` | Verify OTP and complete signup |
+| POST | `/api/auth/signup/start` | Start signup with `{name, email}` and send an OTP |
+| POST | `/api/auth/signup/resend` | Send a new OTP for `{email}` |
+| POST | `/api/auth/signup/verify-code` | Verify `{email, code}` |
+| POST | `/api/auth/signup/set-password` | Complete signup with `{email, password, name}` |
 | POST | `/api/auth/login` | Login with email & password |
+| GET | `/api/auth/me` | Get the signed-in user |
+| POST | `/api/auth/logout` | End the current session |
 
 ### User (Auth Required)
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/user/dashboard` | Dashboard stats & recent activity |
 | GET | `/api/user/saved-spots` | Saved spots list |
+| POST | `/api/user/saved-spots` | Save `{spot_id}`; repeated requests are safe |
 | DELETE | `/api/user/saved-spots/:id` | Remove saved spot |
 | GET | `/api/user/reviews` | User's reviews |
 | PUT | `/api/user/reviews/:id` | Edit a review |
@@ -209,8 +280,10 @@ The app will be running at **http://localhost:3000**
 | GET | `/api/user/bookings` | User's bookings |
 | DELETE | `/api/user/bookings/:id` | Cancel booking (24h rule) |
 | GET | `/api/user/guides` | Guide directory |
-| POST | `/api/bookings` | Create a new booking |
+| POST | `/api/bookings` | Book with `{spot_id, booking_date, persons}` (1-20 people); price is calculated by the server |
 | PUT | `/api/auth/profile` | Update profile |
+
+Send authenticated requests with `Authorization: Bearer <token>`. Session tokens are held in server memory, so users must sign in again after the API server restarts.
 
 ### Admin (Admin Auth Required)
 | Method | Endpoint | Description |
@@ -249,9 +322,10 @@ The app will be running at **http://localhost:3000**
 
 ## 👥 Authors
 
-- ** Umme Hani Punam** — [GitHub](https://github.com/punam06)
--  ** Abu Sayed** — [GitHub](https://github.com/Sayed-47)
-
+- **Punam Papri** — [GitHub](https://github.com/punam06)
 
 ---
 
+## 📄 License
+
+This project is licensed under the MIT License.
