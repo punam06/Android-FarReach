@@ -19,7 +19,7 @@ class MapScreen extends StatelessWidget {
           .where((destination) => destination.hasCoordinates)
           .toList();
       return Scaffold(
-        appBar: AppBar(title: const Text('Trip map')),
+        appBar: AppBar(title: const Text('Trip spots')),
         body: CustomScrollView(
           key: const PageStorageKey('map-scroll'),
           slivers: [
@@ -56,7 +56,7 @@ class MapScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 6),
                               Text(
-                                'Choose a place to open turn-by-turn directions in your preferred map app.',
+                                'Choose a spot to open turn-by-turn directions in your preferred map app.',
                                 style: TextStyle(
                                   color: Theme.of(context)
                                       .colorScheme
@@ -76,7 +76,7 @@ class MapScreen extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
               sliver: SliverToBoxAdapter(
                 child: Text(
-                  '${places.length} mapped destinations',
+                              '${places.length} spots available',
                   style: Theme.of(context).textTheme.headlineMedium,
                 ),
               ),

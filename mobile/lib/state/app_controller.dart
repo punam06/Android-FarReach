@@ -429,8 +429,16 @@ class AppController extends ChangeNotifier {
     destination.district.isEmpty ? destination.division : destination.district,
   );
 
+  Future<WeatherForecast> forecastFor(Destination destination, DateTime date) =>
+      api.getWeatherForecast(destination, date);
+
   Future<List<HotelRecommendation>> hotelsFor(Destination destination) =>
       api.getHotels(destination);
+
+  Future<List<Review>> reviewsFor(Destination destination) async {
+    if (destination.id <= 0) return const [];
+    return api.getReviews(destination.id);
+  }
 
   static String _normalizeName(String value) {
     final normalized = value.trim().toLowerCase();

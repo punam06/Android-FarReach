@@ -245,6 +245,10 @@ async function seed() {
     `);
     console.log('[seeder] Successfully altered spots budget_category column to support Mid');
 
+    // 1b. Widen spots.image so full image URLs fit.
+    await db.query(`ALTER TABLE spots MODIFY COLUMN image TEXT NULL DEFAULT NULL`);
+    console.log('[seeder] Successfully widened spots.image column to TEXT');
+
     // 2. Fetch existing divisions, districts, spots, and guides
     const [divisionsRows] = await db.query('SELECT * FROM divisions');
     const [districtsRows] = await db.query('SELECT * FROM districts');

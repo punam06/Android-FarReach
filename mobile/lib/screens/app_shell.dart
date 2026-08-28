@@ -5,6 +5,7 @@ import 'explore_screen.dart';
 import 'map_screen.dart';
 import 'profile_screen.dart';
 import 'saved_screen.dart';
+import '../widgets/support_chat.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key, required this.controller});
@@ -34,7 +35,7 @@ class _AppShellState extends State<AppShell> {
     NavigationDestination(
       icon: Icon(Icons.map_outlined),
       selectedIcon: Icon(Icons.map),
-      label: 'Map',
+      label: 'Spots',
     ),
     NavigationDestination(
       icon: Icon(Icons.favorite_outline),
@@ -55,7 +56,16 @@ class _AppShellState extends State<AppShell> {
       final body = IndexedStack(index: _index, children: _pages);
       if (!useRail) {
         return Scaffold(
-          body: body,
+          body: Stack(
+            children: [
+              Positioned.fill(child: body),
+              Positioned(
+                right: 18,
+                bottom: 18,
+                child: _SupportButton(onPressed: _openSupport),
+              ),
+            ],
+          ),
           bottomNavigationBar: NavigationBar(
             selectedIndex: _index,
             destinations: _destinations,
@@ -64,34 +74,60 @@ class _AppShellState extends State<AppShell> {
         );
       }
       return Scaffold(
-        body: Row(
+        body: Stack(
           children: [
-            NavigationRail(
-              selectedIndex: _index,
-              extended: constraints.maxWidth >= 1100,
-              groupAlignment: -0.72,
-              leading: Padding(
-                padding: const EdgeInsets.only(top: 18, bottom: 24),
-                child: _BrandMark(extended: constraints.maxWidth >= 1100),
-              ),
-              destinations: _destinations
-                  .map(
-                    (item) => NavigationRailDestination(
-                      icon: item.icon,
-                      selectedIcon: item.selectedIcon,
-                      label: Text(item.label),
+            Positioned.fill(
+              child: Row(
+                children: [
+                  NavigationRail(
+                    selectedIndex: _index,
+                    extended: constraints.maxWidth >= 1100,
+                    groupAlignment: -0.72,
+                    leading: Padding(
+                      padding: const EdgeInsets.only(top: 18, bottom: 24),
+                      child: _BrandMark(extended: constraints.maxWidth >= 1100),
                     ),
-                  )
-                  .toList(),
-              onDestinationSelected: (value) => setState(() => _index = value),
+                    destinations: _destinations
+                        .map(
+                          (item) => NavigationRailDestination(
+                            icon: item.icon,
+                            selectedIcon: item.selectedIcon,
+                            label: Text(item.label),
+                          ),
+                        )
+                        .toList(),
+                    onDestinationSelected: (value) =>
+                        setState(() => _index = value),
+                  ),
+                  const VerticalDivider(width: 1),
+                  Expanded(child: body),
+                ],
+              ),
             ),
-            const VerticalDivider(width: 1),
-            Expanded(child: body),
+            Positioned(
+              right: 24,
+              bottom: 24,
+              child: _SupportButton(onPressed: _openSupport),
+            ),
           ],
         ),
       );
     },
   );
+
+  Future<void> _openSupport() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SupportChatSheet(
+        onNavigate: (index) {
+          setState(() => _index = index);
+          Navigator.pop(context);
+        },
+      ),
+    );
+  }
 }
 
 class _BrandMark extends StatelessWidget {
@@ -123,4 +159,19 @@ class _BrandMark extends StatelessWidget {
       ],
     );
   }
+
+}
+
+class _SupportButton extends StatelessWidget {
+  const _SupportButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) => FloatingActionButton.extended(
+    onPressed: onPressed,
+    icon: const Icon(Icons.chat_bubble_outline),
+    label: const Text('Help'),
+    tooltip: 'Open FarReach guide',
+  );
 }

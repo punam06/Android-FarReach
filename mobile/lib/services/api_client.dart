@@ -132,6 +132,26 @@ class ApiClient {
     return WeatherInfo.fromJson(payload);
   }
 
+  Future<WeatherForecast> getWeatherForecast(
+    Destination destination,
+    DateTime date,
+  ) async {
+    if (!destination.hasCoordinates) {
+      throw const ApiFailure('A forecast is unavailable for this destination.');
+    }
+    final day = date.toIso8601String().split('T').first;
+    final uri = Uri.https('api.open-meteo.com', '/v1/forecast', {
+      'latitude': '${destination.latitude}',
+      'longitude': '${destination.longitude}',
+      'daily': 'temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code',
+      'timezone': 'auto',
+      'start_date': day,
+      'end_date': day,
+    });
+    final payload = await _decode(() => _client.get(uri, headers: _headers));
+    return WeatherForecast.fromJson(payload, date);
+  }
+
   Future<List<HotelRecommendation>> getHotels(
     Destination destination, {
     String? checkIn,
@@ -158,6 +178,21 @@ class ApiClient {
           (item) =>
               HotelRecommendation.fromJson(Map<String, dynamic>.from(item)),
         )
+        .toList();
+  }
+
+  Future<List<Review>> getReviews(int spotId) async {
+    final payload = await _decode(
+      () => _client.get(
+        _uri('/api/reviews', {'spotId': '$spotId'}),
+        headers: _headers,
+      ),
+    );
+    final reviews = payload['reviews'];
+    if (reviews is! List) return const [];
+    return reviews
+        .whereType<Map>()
+        .map((item) => Review.fromJson(Map<String, dynamic>.from(item)))
         .toList();
   }
 

@@ -16,16 +16,36 @@ class DestinationImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final fallback = Image.asset(
-      destination.assetPath,
-      fit: fit,
-      width: double.infinity,
-      height: double.infinity,
-      errorBuilder: (_, _, _) => ColoredBox(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: const Center(child: Icon(Icons.landscape_outlined, size: 56)),
+    final hasAsset = destination.assetPath.isNotEmpty;
+    final placeholder = ColoredBox(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.landscape_outlined,
+              size: 48,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Photo unavailable',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+          ],
+        ),
       ),
     );
+    final fallback = hasAsset
+        ? Image.asset(
+            destination.assetPath,
+            fit: fit,
+            width: double.infinity,
+            height: double.infinity,
+            errorBuilder: (_, _, _) => placeholder,
+          )
+        : placeholder;
     final url = destination.imageUrl(baseUrl);
     return Semantics(
       image: true,

@@ -135,7 +135,7 @@ String assetForDestination(String name) {
   if (normalized.contains('rangamati') || normalized.contains('kaptai')) {
     return 'assets/images/rangamati.jpg';
   }
-  return 'assets/images/rangamati.jpg';
+  return '';
 }
 
 class WeatherInfo {
@@ -171,6 +171,46 @@ class WeatherInfo {
       humidity: _asInt(main['humidity']),
       windKmh: (_asDouble(wind['speed']) ?? 0) * 3.6,
     );
+  }
+}
+
+class WeatherForecast {
+  const WeatherForecast({
+    required this.date,
+    required this.minTemperature,
+    required this.maxTemperature,
+    required this.precipitationProbability,
+    required this.weatherCode,
+  });
+
+  final DateTime date;
+  final double minTemperature;
+  final double maxTemperature;
+  final int precipitationProbability;
+  final int weatherCode;
+
+  factory WeatherForecast.fromJson(Map<String, dynamic> json, DateTime date) {
+    final daily = json['daily'] is Map
+        ? Map<String, dynamic>.from(json['daily'] as Map)
+        : const <String, dynamic>{};
+    final min = _firstNumber(daily['temperature_2m_min']);
+    final max = _firstNumber(daily['temperature_2m_max']);
+    final rain = _firstNumber(daily['precipitation_probability_max']);
+    final code = _firstNumber(daily['weather_code']);
+    return WeatherForecast(
+      date: date,
+      minTemperature: min,
+      maxTemperature: max,
+      precipitationProbability: rain.round(),
+      weatherCode: code.round(),
+    );
+  }
+
+  static double _firstNumber(Object? value) {
+    if (value is List && value.isNotEmpty) {
+      return _asDouble(value.first) ?? 0;
+    }
+    return _asDouble(value) ?? 0;
   }
 }
 
@@ -256,13 +296,47 @@ class Booking {
   );
 }
 
+class Review {
+  const Review({
+    required this.rating,
+    this.text = '',
+    this.userName = '',
+    this.createdAt = '',
+    this.adminReply = '',
+  });
+
+  final int rating;
+  final String text;
+  final String userName;
+  final String createdAt;
+  final String adminReply;
+
+  factory Review.fromJson(Map<String, dynamic> json) {
+    final admin = json['adminResponse'];
+    final reply = admin is Map
+        ? _asString(admin['text'])
+        : _asString(json['admin_reply']);
+    return Review(
+      rating: _asInt(json['rating']),
+      text: _asString(json['text']),
+      userName: _asString(json['userName']).isEmpty
+          ? 'Traveler'
+          : _asString(json['userName']),
+      createdAt: _asString(json['created_at']),
+      adminReply: reply,
+    );
+  }
+}
+
 const fallbackDestinations = <Destination>[
   Destination(
     id: 0,
     name: "Cox's Bazar",
     category: 'Beach',
-    description: 'Long sandy shores, seafood, sunrise walks, and an easy base for exploring the southeast coast.',
-    history: 'A landmark coastal destination shaped by fishing communities and maritime trade.',
+    description:
+        'Long sandy shores, seafood, sunrise walks, and an easy base for exploring the southeast coast.',
+    history:
+        'A landmark coastal destination shaped by fishing communities and maritime trade.',
     district: "Cox's Bazar",
     division: 'Chattogram',
     budget: 'Mid',
@@ -275,8 +349,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: 'The Sundarbans',
     category: 'Nature',
-    description: 'A vast mangrove landscape of tidal rivers, quiet creeks, wildlife, and community-led boat journeys.',
-    history: 'The forest has protected the delta and supported river communities for generations.',
+    description:
+        'A vast mangrove landscape of tidal rivers, quiet creeks, wildlife, and community-led boat journeys.',
+    history:
+        'The forest has protected the delta and supported river communities for generations.',
     district: 'Khulna',
     division: 'Khulna',
     budget: 'High',
@@ -289,8 +365,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: "Saint Martin's Island",
     category: 'Island',
-    description: 'Clear water, coral-stone beaches, simple island food, and slow evenings beside the Bay of Bengal.',
-    history: 'Bangladesh’s only coral island is home to a close-knit fishing community.',
+    description:
+        'Clear water, coral-stone beaches, simple island food, and slow evenings beside the Bay of Bengal.',
+    history:
+        'Bangladesh’s only coral island is home to a close-knit fishing community.',
     district: "Cox's Bazar",
     division: 'Chattogram',
     budget: 'High',
@@ -303,8 +381,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: 'Bandarban',
     category: 'Hills',
-    description: 'Cloudy ridgelines, waterfalls, winding roads, and diverse hill communities in the Chattogram Hill Tracts.',
-    history: 'The region is known for its Indigenous cultures, crafts, and long-established hill settlements.',
+    description:
+        'Cloudy ridgelines, waterfalls, winding roads, and diverse hill communities in the Chattogram Hill Tracts.',
+    history:
+        'The region is known for its Indigenous cultures, crafts, and long-established hill settlements.',
     district: 'Bandarban',
     division: 'Chattogram',
     budget: 'Mid',
@@ -317,8 +397,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: 'Srimangal Tea Country',
     category: 'Nature',
-    description: 'Rolling tea estates, forest trails, cycling routes, and the gentle rhythm of northeastern Bangladesh.',
-    history: 'Tea cultivation has shaped the area’s landscape and working communities for more than a century.',
+    description:
+        'Rolling tea estates, forest trails, cycling routes, and the gentle rhythm of northeastern Bangladesh.',
+    history:
+        'Tea cultivation has shaped the area’s landscape and working communities for more than a century.',
     district: 'Moulvibazar',
     division: 'Sylhet',
     budget: 'Low',
@@ -331,8 +413,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: 'Lalbagh Fort',
     category: 'History',
-    description: 'A calm Mughal-era complex with gardens, gateways, a mosque, and a museum in Old Dhaka.',
-    history: 'Construction began in the seventeenth century and the unfinished fort remains one of Dhaka’s defining monuments.',
+    description:
+        'A calm Mughal-era complex with gardens, gateways, a mosque, and a museum in Old Dhaka.',
+    history:
+        'Construction began in the seventeenth century and the unfinished fort remains one of Dhaka’s defining monuments.',
     district: 'Dhaka',
     division: 'Dhaka',
     budget: 'Low',
@@ -345,8 +429,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: 'Ahsan Manzil',
     category: 'History',
-    description: 'The Pink Palace overlooks the Buriganga and offers an accessible introduction to Dhaka’s urban history.',
-    history: 'The restored palace once served as the residence and seat of influence of Dhaka’s nawabs.',
+    description:
+        'The Pink Palace overlooks the Buriganga and offers an accessible introduction to Dhaka’s urban history.',
+    history:
+        'The restored palace once served as the residence and seat of influence of Dhaka’s nawabs.',
     district: 'Dhaka',
     division: 'Dhaka',
     budget: 'Low',
@@ -359,8 +445,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: 'Jaflong',
     category: 'Nature',
-    description: 'River stones, green hills, tea gardens, and borderland views make this a popular day trip from Sylhet.',
-    history: 'River life and stone collection have long shaped livelihoods around the Piyain River.',
+    description:
+        'River stones, green hills, tea gardens, and borderland views make this a popular day trip from Sylhet.',
+    history:
+        'River life and stone collection have long shaped livelihoods around the Piyain River.',
     district: 'Sylhet',
     division: 'Sylhet',
     budget: 'Low',
@@ -373,8 +461,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: 'Kuakata',
     category: 'Beach',
-    description: 'A broad southern beach known for open horizons, fishing communities, and both sunrise and sunset views.',
-    history: 'Kuakata’s name and cultural identity are closely linked with the area’s Rakhine community.',
+    description:
+        'A broad southern beach known for open horizons, fishing communities, and both sunrise and sunset views.',
+    history:
+        'Kuakata’s name and cultural identity are closely linked with the area’s Rakhine community.',
     district: 'Patuakhali',
     division: 'Barishal',
     budget: 'Mid',
@@ -387,8 +477,10 @@ const fallbackDestinations = <Destination>[
     id: 0,
     name: 'Rangamati',
     category: 'Lake',
-    description: 'Kaptai Lake, forested hills, boat routes, markets, and viewpoints create an easygoing lakeside escape.',
-    history: 'The area carries the living traditions of several Indigenous communities of the hill tracts.',
+    description:
+        'Kaptai Lake, forested hills, boat routes, markets, and viewpoints create an easygoing lakeside escape.',
+    history:
+        'The area carries the living traditions of several Indigenous communities of the hill tracts.',
     district: 'Rangamati',
     division: 'Chattogram',
     budget: 'Mid',

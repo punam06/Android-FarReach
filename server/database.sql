@@ -197,7 +197,7 @@ CREATE TABLE `spots` (
   `category` varchar(100) DEFAULT 'General',
   `description` text,
   `history` text,
-  `image` varchar(500) DEFAULT '',
+  `image` text,
   `budget_category` enum('Low','High') DEFAULT 'Low',
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
