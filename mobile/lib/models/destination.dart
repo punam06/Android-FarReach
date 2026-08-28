@@ -135,7 +135,7 @@ String assetForDestination(String name) {
   if (normalized.contains('rangamati') || normalized.contains('kaptai')) {
     return 'assets/images/rangamati.jpg';
   }
-  return 'assets/images/coxs_bazar.jpg';
+  return 'assets/images/rangamati.jpg';
 }
 
 class WeatherInfo {

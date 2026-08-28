@@ -1,4 +1,6 @@
 const db = require('./db');
+const fs = require('fs');
+const path = require('path');
 
 const spotsData = [
   ["Cox's Bazar Sea Beach", "Cox's Bazar", "beach", [21.4159, 91.9810]],
@@ -184,6 +186,13 @@ const spotImages = {
   "Ratargul Swamp Forest": "Bishankandi-4.jpg"
 };
 
+Object.assign(
+  spotImages,
+  JSON.parse(
+    fs.readFileSync(path.join(__dirname, 'spot-image-sources.json'), 'utf8'),
+  ),
+);
+
 const firstNames = ['Arif', 'Nusrat', 'Rafiq', 'Maya', 'Tasnim', 'Sujon', 'Jahan', 'Rumana', 'Faruk', 'Lima', 'Kamal', 'Habib', 'Yasmin', 'Zaman', 'Rashed', 'Jamil', 'Tariq', 'Sania', 'Anis', 'Nipa'];
 const lastNames = ['Rahman', 'Islam', 'Khan', 'Begum', 'Ahmed', 'Chowdhury', 'Akter', 'Uddin', 'Hassan', 'Ali', 'Siddique', 'Kabir'];
 const languagesList = [
@@ -314,10 +323,10 @@ async function seed() {
         spotsMap[name.toLowerCase()] = spotId;
         console.log(`[seeder] Seeded spot: ${name} (ID: ${spotId})`);
       } else {
-        // Update coordinates and budget category to make sure existing spots are fully initialized
+        // Keep existing rows synchronized with the canonical destination image.
         await db.query(`
           UPDATE spots 
-          SET latitude = ?, longitude = ?, budget_category = ?, category = ?, image = IF(image = '', ?, image)
+          SET latitude = ?, longitude = ?, budget_category = ?, category = ?, image = ?
           WHERE id = ?
         `, [lat, lng, budgetCategory, category, image, spotId]);
       }
