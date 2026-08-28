@@ -34,13 +34,15 @@ class Spot {
         history: (json['history'] ?? '').toString(),
         image: (json['image'] ?? '').toString(),
         budgetCategory: (json['budget_category'] ?? '').toString(),
-        latitude:
-            json['latitude'] == null ? null : (json['latitude'] as num).toDouble(),
-        longitude: json['longitude'] == null
-            ? null
-            : (json['longitude'] as num).toDouble(),
+        latitude: _toDouble(json['latitude']),
+        longitude: _toDouble(json['longitude']),
         districtName: (json['district_name'] ?? '').toString(),
         divisionName: (json['division_name'] ?? '').toString(),
       );
+
+  static double? _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '');
+  }
 }
 
