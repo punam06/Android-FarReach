@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "771418766293",
+    "project_id": "farreach-tourism-bd",
+    "storage_bucket": "farreach-tourism-bd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:771418766293:android:209794e9598f828f099b5c",
+        "android_client_info": {
+          "package_name": "com.farreach.farreach"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC4oi1PVeUrqPD8rfOWVChLFA9AFRuh8zc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

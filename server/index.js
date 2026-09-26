@@ -21,20 +21,7 @@ for (const envPath of envPaths) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const clientRoot = path.join(projectRoot, 'public');
-const imageRoot = path.join(clientRoot, 'spot-pictures');
-const clientFiles = new Set([
-  'admin-dashboard.html',
-  'auth.js',
-  'dashboard.css',
-  'destination-init.js',
-  'destination.html',
-  'destination.js',
-  'index.html',
-  'script.js',
-  'styles.css',
-  'user-dashboard.html',
-]);
+const imageRoot = path.join(projectRoot, 'spot-pictures');
 const allowedImageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
 app.use(express.json({ limit: '1mb' }));
@@ -49,14 +36,9 @@ app.use((req, res, next) => {
   next();
 });
 
-function sendClientFile(fileName) {
-  if (!clientFiles.has(fileName)) throw new Error(`Client file is not allowlisted: ${fileName}`);
-  return (req, res) => res.sendFile(path.join(clientRoot, fileName));
-}
-
-for (const fileName of clientFiles) {
-  app.get([`/${fileName}`, `/public/${fileName}`], sendClientFile(fileName));
-}
+app.get('/', (req, res) => {
+  res.json({ status: 'ok', name: 'FarReach Tourism API', version: '1.0.0' });
+});
 
 const imageStaticMiddleware = express.static(imageRoot, {
   dotfiles: 'deny',
