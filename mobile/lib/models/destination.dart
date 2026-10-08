@@ -237,6 +237,8 @@ class Booking {
     required this.date,
     required this.status,
     required this.persons,
+    this.reference = '',
+    this.canModify = false,
   });
 
   final int id;
@@ -245,8 +247,12 @@ class Booking {
   final String date;
   final String status;
   final int persons;
+  final String reference;
+  final bool canModify;
 
   factory Booking.fromJson(Map<String, dynamic> json) => Booking(
+    reference: _asString(json['reference']),
+    canModify: json['can_modify'] == true,
     id: _asInt(json['id']),
     spotName: _asString(json['spot_name'] ?? json['target_name']),
     price: _asInt(json['price']),

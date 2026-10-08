@@ -2,11 +2,17 @@
 
 A full-stack web and Flutter Android application for exploring tourist destinations across Bangladesh. Discover destinations, check weather, save places, book trips, and manage travel from a responsive Material 3 mobile experience or the existing web app.
 
-![Node.js](https://img.shields.io/badge/Node.js-v18+-green?logo=node.js)
+![Node.js](https://img.shields.io/badge/Node.js-v20+-green?logo=node.js)
 ![MySQL](https://img.shields.io/badge/MySQL-8.0-blue?logo=mysql)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ---
+
+## Travel services implementation
+
+See [the travel services guide](docs/TRAVEL_SERVICES.md) for feature status, API contracts, Docker setup, pricing rules, tickets, chatbot and verification commands.
+
+Start the local backend with `docker compose up -d --build --wait`. The API/web app is at `http://127.0.0.1:3000`. Android Profile now includes editing, booking management and receipts, saved spots, tickets/custom trip requests, and travel chat. Destination details include server budget pricing and filtered stay suggestions.
 
 ## ✨ Features
 
@@ -90,7 +96,7 @@ FarReach-App/
 
 ### Prerequisites
 
-- **Node.js** v18 or higher
+- **Node.js** v20 or higher
 - **MySQL** 8.0 or higher
 - **npm** (comes with Node.js)
 - **Flutter** stable and Android SDK (for the mobile app)
@@ -99,8 +105,8 @@ FarReach-App/
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/punam06/FarReach-App.git
-cd FarReach-App
+git clone https://github.com/punam06/Android-FarReach.git
+cd Android-FarReach
 ```
 
 ### 2. Set Up the Database
@@ -262,7 +268,7 @@ The APK is written to `mobile/build/app/outputs/flutter-apk/app-debug.apk`.
 | POST | `/api/auth/signup/start` | Start signup with `{name, email}` and send an OTP |
 | POST | `/api/auth/signup/resend` | Send a new OTP for `{email}` |
 | POST | `/api/auth/signup/verify-code` | Verify `{email, code}` |
-| POST | `/api/auth/signup/set-password` | Complete signup with `{email, password, name}` |
+| POST | `/api/auth/signup/set-password` | Complete signup with `{email, password, name, verificationToken}` returned by verification |
 | POST | `/api/auth/login` | Login with email & password |
 | GET | `/api/auth/me` | Get the signed-in user |
 | POST | `/api/auth/logout` | End the current session |
@@ -283,7 +289,7 @@ The APK is written to `mobile/build/app/outputs/flutter-apk/app-debug.apk`.
 | POST | `/api/bookings` | Book with `{spot_id, booking_date, persons}` (1-20 people); price is calculated by the server |
 | PUT | `/api/auth/profile` | Update profile |
 
-Send authenticated requests with `Authorization: Bearer <token>`. Session tokens are held in server memory, so users must sign in again after the API server restarts.
+Send authenticated requests with `Authorization: Bearer <token>`. Session tokens are hashed in MySQL, survive API restarts, and expire after seven days.
 
 ### Admin (Admin Auth Required)
 | Method | Endpoint | Description |

@@ -366,3 +366,4 @@ async function seed() {
 }
 
 module.exports = seed;
+module.exports.districtCoords = districtCoords;

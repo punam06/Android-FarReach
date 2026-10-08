@@ -5,6 +5,10 @@ import 'package:url_launcher/url_launcher.dart';
 import '../models/destination.dart';
 import '../services/api_client.dart';
 import '../state/app_controller.dart';
+import 'account_forms_screen.dart';
+import 'booking_management_screen.dart';
+import 'saved_screen.dart';
+import 'support_screen.dart';
 
 enum _AuthMode { signIn, register }
 
@@ -183,6 +187,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
                 : const Text('Sign in'),
+          ),
+          TextButton(
+            onPressed: widget.controller.authBusy
+                ? null
+                : () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          ResetPasswordScreen(api: widget.controller.api),
+                    ),
+                  ),
+            child: const Text('Forgot password?'),
           ),
         ],
       ),
@@ -413,6 +429,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _clearSensitiveFields() {
+    _mode = _AuthMode.signIn;
+    _registerStep = 0;
+    _obscurePassword = true;
     _password.clear();
     _confirmPassword.clear();
     _code.clear();
@@ -506,7 +525,7 @@ class _SignedInProfile extends StatelessWidget {
                                 children: [
                                   Icon(Icons.cloud_done_outlined, size: 18),
                                   SizedBox(width: 6),
-                                  Text('Account sync enabled'),
+                                  Expanded(child: Text('Account sync enabled')),
                                 ],
                               ),
                             ],
@@ -514,6 +533,90 @@ class _SignedInProfile extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Card(
+                  child: Column(
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.edit_outlined),
+                        title: const Text('Edit profile'),
+                        subtitle: Text(
+                          [
+                            user.phone,
+                            user.address,
+                          ].where((v) => v.isNotEmpty).join(' · '),
+                        ),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                EditProfileScreen(controller: controller),
+                          ),
+                        ),
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.favorite_outline),
+                        title: const Text('Saved spots'),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => SavedScreen(controller: controller),
+                          ),
+                        ),
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.confirmation_number_outlined),
+                        title: const Text('Tickets & custom trip requests'),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                TicketsScreen(controller: controller),
+                          ),
+                        ),
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.chat_outlined),
+                        title: const Text('Travel assistant'),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => ChatScreen(controller: controller),
+                          ),
+                        ),
+                      ),
+                      if (user.role == 'admin')
+                        ListTile(
+                          leading: const Icon(Icons.support_agent),
+                          title: const Text('Support inbox'),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => TicketsScreen(
+                                controller: controller,
+                                admin: true,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ListTile(
+                        leading: const Icon(Icons.refresh),
+                        title: const Text('Refresh profile & bookings'),
+                        onTap: () async {
+                          try {
+                            await controller.refreshAccount();
+                          } on ApiFailure catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text(e.message)),
+                              );
+                            }
+                          }
+                        },
+                      ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 16),
@@ -638,12 +741,14 @@ class _StatCard extends StatelessWidget {
         children: [
           Icon(icon, color: Theme.of(context).colorScheme.primary),
           const SizedBox(width: 14),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(value, style: Theme.of(context).textTheme.headlineMedium),
-              Text(label),
-            ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(value, style: Theme.of(context).textTheme.headlineMedium),
+                Text(label),
+              ],
+            ),
           ),
         ],
       ),
@@ -697,7 +802,20 @@ class _BookingCard extends StatelessWidget {
                 ],
               ),
             ),
-            if (!cancelled)
+            IconButton(
+              tooltip: 'Manage booking & receipt',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => BookingManagementScreen(
+                    controller: controller,
+                    booking: booking,
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.receipt_long_outlined),
+            ),
+            if (!cancelled && booking.canModify)
               IconButton(
                 tooltip: 'Cancel booking',
                 onPressed: () => _cancel(context),

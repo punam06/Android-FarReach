@@ -52,7 +52,13 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
       final useRail = constraints.maxWidth >= 600;
-      final body = IndexedStack(index: _index, children: _pages);
+      final body = IndexedStack(
+        index: _index,
+        children: [
+          for (var index = 0; index < _pages.length; index++)
+            HeroMode(enabled: index == _index, child: _pages[index]),
+        ],
+      );
       if (!useRail) {
         return Scaffold(
           body: body,

@@ -85,6 +85,7 @@
             <div class="form-group"><label><i class="fas fa-phone"></i> Phone</label><input type="text" class="form-control" id="edit-phone" placeholder="Your phone number"></div>
             <div class="form-group"><label><i class="fas fa-map-marker-alt"></i> Address</label><input type="text" class="form-control" id="edit-address" placeholder="Your address"></div>
             <div class="form-group"><label><i class="fas fa-image"></i> Profile Picture</label><input type="file" class="form-control" id="edit-pic" accept="image/*"></div>
+            <div class="form-group"><label>Current Password (required to change password)</label><input type="password" class="form-control" id="edit-current-password" autocomplete="current-password"></div>
             <div class="form-group"><label><i class="fas fa-lock"></i> New Password</label><input type="password" class="form-control" id="edit-password" placeholder="Leave blank to keep current"></div>
             <div class="form-group"><label><i class="fas fa-lock"></i> Confirm Password</label><input type="password" class="form-control" id="edit-confirm-password" placeholder="Confirm new password"></div>
           </form>
@@ -347,7 +348,7 @@
       formData.append('name', name);
       formData.append('phone', phone);
       formData.append('address', address);
-      if(pw) formData.append('password', pw);
+      if(pw) { formData.append('password', pw); formData.append('current_password', document.getElementById('edit-current-password').value); }
       if(pic) formData.append('profile_pic', pic);
 
       try {

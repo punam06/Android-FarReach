@@ -411,6 +411,60 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> refreshAccount() async {
+    final session = _captureSession();
+    if (session == null) return;
+    try {
+      final account = await api.getMe();
+      if (!_isCurrentSession(session)) return;
+      _user = account;
+      await Future.wait([_loadBookings(), _syncSavedWithServer()]);
+    } on ApiFailure catch (error) {
+      if (error.isUnauthorized && _isCurrentSession(session)) {
+        await _clearSession();
+      }
+      rethrow;
+    } finally {
+      notifyListeners();
+    }
+  }
+
+  Future<void> updateProfile({
+    required String name,
+    required String phone,
+    required String address,
+    String? password,
+    String? currentPassword,
+  }) async {
+    final session = _captureSession();
+    if (session == null) {
+      throw const ApiFailure('Sign in to edit your profile.');
+    }
+    final account = await api.updateProfile(
+      name: name,
+      phone: phone,
+      address: address,
+      password: password,
+      currentPassword: currentPassword,
+    );
+    if (!_isCurrentSession(session)) {
+      throw const ApiFailure('Your account changed. Sign in again.');
+    }
+    _user = account;
+    notifyListeners();
+  }
+
+  Future<void> updateBooking(int id, String date, int persons) async {
+    final session = _captureSession();
+    if (session == null) throw const ApiFailure('Sign in to manage bookings.');
+    await api.updateBooking(id, date, persons);
+    if (!_isCurrentSession(session)) {
+      throw const ApiFailure('Your account changed.');
+    }
+    await _loadBookings();
+    notifyListeners();
+  }
+
   Future<void> _loadBookings() async {
     final session = _captureSession();
     if (session == null) return;

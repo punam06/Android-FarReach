@@ -8,6 +8,7 @@
     signupStep: 'details',
     pendingEmail: '',
     pendingName: '',
+    verificationToken: '',
     codeExpiresAt: 0,
     resendAvailableAt: 0,
   };
@@ -46,6 +47,7 @@
         signupStep: state.signupStep,
         pendingEmail: state.pendingEmail,
         pendingName: state.pendingName,
+        verificationToken: state.verificationToken,
         codeExpiresAt: state.codeExpiresAt,
         resendAvailableAt: state.resendAvailableAt,
       }));
@@ -394,11 +396,12 @@
     showMessage('Checking verification code...', 'info');
 
     try {
-      await request('/api/auth/signup/verify-code', {
+      const verified = await request('/api/auth/signup/verify-code', {
         method: 'POST',
         body: JSON.stringify({ email, code }),
       });
 
+      state.verificationToken = verified.verificationToken;
       renderSignupStep('password');
       showMessage('Code verified. Now create your password.', 'success');
       els.signupPassword?.focus();
@@ -419,8 +422,8 @@
       return;
     }
 
-    if (password.length < 6) {
-      showMessage('Password must be at least 6 characters.', 'error');
+    if (password.length < 8) {
+      showMessage('Password must be at least 8 characters.', 'error');
       els.signupPassword?.focus();
       return;
     }
@@ -436,7 +439,7 @@
     try {
       const data = await request('/api/auth/signup/set-password', {
         method: 'POST',
-        body: JSON.stringify({ email, password, confirmPassword, name: state.pendingName }),
+        body: JSON.stringify({ email, password, confirmPassword, name: state.pendingName, verificationToken: state.verificationToken }),
       });
 
       saveSession(data.token, data.user);
@@ -516,6 +519,7 @@
   function resetSignupFlow() {
     state.pendingEmail = '';
     state.pendingName = '';
+    state.verificationToken = '';
     state.signupStep = 'details';
     state.codeExpiresAt = 0;
     state.resendAvailableAt = 0;
@@ -624,6 +628,7 @@
       state.signupStep = savedState.signupStep || 'details';
       state.pendingEmail = savedState.pendingEmail || '';
       state.pendingName = savedState.pendingName || '';
+      state.verificationToken = savedState.verificationToken || '';
       state.codeExpiresAt = savedState.codeExpiresAt || 0;
       state.resendAvailableAt = savedState.resendAvailableAt || 0;
     }

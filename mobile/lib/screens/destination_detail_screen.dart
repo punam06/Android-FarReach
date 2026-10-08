@@ -5,6 +5,7 @@ import '../models/destination.dart';
 import '../services/api_client.dart';
 import '../state/app_controller.dart';
 import '../widgets/destination_image.dart';
+import 'travel_tools_screen.dart';
 
 class DestinationDetailScreen extends StatefulWidget {
   const DestinationDetailScreen({
@@ -223,6 +224,22 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
                         ),
                       ),
                       const SizedBox(height: 22),
+                      OutlinedButton.icon(
+                        onPressed: widget.destination.id <= 0
+                            ? null
+                            : () => Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => BudgetScreen(
+                                    api: widget.controller.api,
+                                    destination: widget.destination,
+                                  ),
+                                ),
+                              ),
+                        icon: const Icon(Icons.calculate_outlined),
+                        label: const Text('Budget calculator'),
+                      ),
+                      const SizedBox(height: 12),
                       Card(
                         color: Theme.of(context).colorScheme.primaryContainer,
                         child: Padding(
@@ -346,12 +363,14 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
   }
 
   Future<void> _showHotels() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) =>
-          _HotelsSheet(future: widget.controller.hotelsFor(widget.destination)),
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => StaysScreen(
+          api: widget.controller.api,
+          destination: widget.destination,
+        ),
+      ),
     );
   }
 
@@ -560,81 +579,6 @@ class _WeatherCard extends StatelessWidget {
   );
 }
 
-class _HotelsSheet extends StatelessWidget {
-  const _HotelsSheet({required this.future});
-
-  final Future<List<HotelRecommendation>> future;
-
-  @override
-  Widget build(BuildContext context) => SafeArea(
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-      child: SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.68,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Suggested stays',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Suggestions and availability are estimates; verify before paying.',
-            ),
-            const SizedBox(height: 16),
-            Expanded(
-              child: FutureBuilder<List<HotelRecommendation>>(
-                future: future,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError) {
-                    return const Center(
-                      child: Text('Stays are unavailable right now.'),
-                    );
-                  }
-                  final hotels = snapshot.data ?? const [];
-                  if (hotels.isEmpty) {
-                    return const Center(child: Text('No suggestions found.'));
-                  }
-                  return ListView.separated(
-                    itemCount: hotels.length,
-                    separatorBuilder: (_, _) => const Divider(),
-                    itemBuilder: (context, index) {
-                      final hotel = hotels[index];
-                      final hotelUri = _safeWebUri(hotel.url);
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: CircleAvatar(
-                          child: Text(hotel.rating.toStringAsFixed(1)),
-                        ),
-                        title: Text(hotel.name),
-                        subtitle: Text(
-                          '৳${hotel.price} / night · ${hotel.availability}\n${hotel.note}',
-                        ),
-                        isThreeLine: true,
-                        trailing: hotelUri == null
-                            ? null
-                            : IconButton(
-                                tooltip: 'Open hotel website',
-                                onPressed: () => _openWebUri(context, hotelUri),
-                                icon: const Icon(Icons.open_in_new),
-                              ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
 class _BookingSheet extends StatefulWidget {
   const _BookingSheet({required this.controller, required this.destination});
 
@@ -651,13 +595,42 @@ class _BookingSheetState extends State<_BookingSheet> {
   bool _submitting = false;
   String? _error;
 
-  int get _estimate {
-    final rate = switch (widget.destination.budget.toLowerCase()) {
-      'high' => 1700,
-      'mid' => 1250,
-      _ => 800,
-    };
-    return rate * _persons;
+  Map<String, dynamic>? _quote;
+  bool _quoteLoading = false;
+  int _quoteGeneration = 0;
+
+  Future<void> _refreshQuote() async {
+    final generation = ++_quoteGeneration;
+    setState(() {
+      _quote = null;
+      _error = null;
+      _quoteLoading = _date != null;
+    });
+    if (_date == null) return;
+    try {
+      final data = await widget.controller.api.requestJson(
+        '/api/bookings/quote',
+        method: 'POST',
+        body: {
+          'spot_id': widget.destination.id,
+          'persons': _persons,
+          'booking_date': dateOnly(_date!),
+        },
+      );
+      if (mounted && generation == _quoteGeneration) {
+        setState(
+          () => _quote = Map<String, dynamic>.from(data['quote'] as Map),
+        );
+      }
+    } on ApiFailure catch (e) {
+      if (mounted && generation == _quoteGeneration) {
+        setState(() => _error = e.message);
+      }
+    } finally {
+      if (mounted && generation == _quoteGeneration) {
+        setState(() => _quoteLoading = false);
+      }
+    }
   }
 
   @override
@@ -681,7 +654,7 @@ class _BookingSheetState extends State<_BookingSheet> {
           const Text('Choose a future date and the number of travelers.'),
           const SizedBox(height: 22),
           OutlinedButton.icon(
-            onPressed: _pickDate,
+            onPressed: _submitting ? null : _pickDate,
             icon: const Icon(Icons.calendar_today_outlined),
             label: Text(
               _date == null
@@ -695,8 +668,11 @@ class _BookingSheetState extends State<_BookingSheet> {
               const Expanded(child: Text('Travelers')),
               IconButton.outlined(
                 tooltip: 'Remove traveler',
-                onPressed: _persons > 1
-                    ? () => setState(() => _persons--)
+                onPressed: !_submitting && _persons > 1
+                    ? () {
+                        setState(() => _persons--);
+                        _refreshQuote();
+                      }
                     : null,
                 icon: const Icon(Icons.remove),
               ),
@@ -710,8 +686,11 @@ class _BookingSheetState extends State<_BookingSheet> {
               ),
               IconButton.outlined(
                 tooltip: 'Add traveler',
-                onPressed: _persons < 20
-                    ? () => setState(() => _persons++)
+                onPressed: !_submitting && _persons < 20
+                    ? () {
+                        setState(() => _persons++);
+                        _refreshQuote();
+                      }
                     : null,
                 icon: const Icon(Icons.add),
               ),
@@ -721,10 +700,14 @@ class _BookingSheetState extends State<_BookingSheet> {
           Card(
             child: ListTile(
               leading: const Icon(Icons.receipt_long_outlined),
-              title: const Text('Estimated package total'),
-              subtitle: const Text('Final price is calculated by the server.'),
+              title: const Text('Server package quote'),
+              subtitle: const Text(
+                'Package reservation only; stays and transport are separate.',
+              ),
               trailing: Text(
-                '৳$_estimate',
+                _quoteLoading
+                    ? 'Loading…'
+                    : (_quote == null ? 'Choose date' : '৳${_quote!['total']}'),
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             ),
@@ -740,7 +723,9 @@ class _BookingSheetState extends State<_BookingSheet> {
           SizedBox(
             width: double.infinity,
             child: FilledButton(
-              onPressed: _submitting ? null : _submit,
+              onPressed: _submitting || _quoteLoading || _quote == null
+                  ? null
+                  : _submit,
               child: _submitting
                   ? const SizedBox.square(
                       dimension: 22,
@@ -762,7 +747,10 @@ class _BookingSheetState extends State<_BookingSheet> {
       lastDate: DateTime.now().add(const Duration(days: 365)),
       initialDate: _date ?? tomorrow,
     );
-    if (value != null) setState(() => _date = value);
+    if (value != null && mounted) {
+      setState(() => _date = value);
+      await _refreshQuote();
+    }
   }
 
   Future<void> _submit() async {
@@ -792,26 +780,3 @@ class _BookingSheetState extends State<_BookingSheet> {
 String _capitalize(String value) => value.isEmpty
     ? value
     : '${value[0].toUpperCase()}${value.substring(1).toLowerCase()}';
-
-Uri? _safeWebUri(String value) {
-  final uri = Uri.tryParse(value.trim());
-  if (uri == null || !uri.hasAuthority) return null;
-  return (uri.scheme == 'https' || uri.scheme == 'http') ? uri : null;
-}
-
-Future<void> _openWebUri(BuildContext context, Uri uri) async {
-  try {
-    final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!opened && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open this link.')),
-      );
-    }
-  } catch (_) {
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not open this link.')),
-      );
-    }
-  }
-}

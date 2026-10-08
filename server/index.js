@@ -87,17 +87,21 @@ app.get('/client-config.js', (req, res) => {
 
 // Admin authentication middleware
 async function requireAdmin(req, res, next) {
-  const user = await currentUserFromRequest(req);
-  if (!user) return res.status(401).json({ error: 'Sign in required' });
-  if (user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
-  next();
+  try {
+    const user = await currentUserFromRequest(req);
+    if (!user) return res.status(401).json({ error: 'Sign in required' });
+    if (user.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+    next();
+  } catch (err) { next(err); }
 }
 
 // User authentication middleware
 async function requireAuth(req, res, next) {
-  const user = await currentUserFromRequest(req);
-  if (!user) return res.status(401).json({ error: 'Sign in required' });
-  next();
+  try {
+    const user = await currentUserFromRequest(req);
+    if (!user) return res.status(401).json({ error: 'Sign in required' });
+    next();
+  } catch (err) { next(err); }
 }
 
 
@@ -496,7 +500,9 @@ app.get('/api/directions', async (req, res) => {
   }
 });
 
-const sessionTokens = new Map();
+const { digest, mountAccountApi } = require('./account-api');
+const { mountTravelApi, transaction } = require('./travel-api');
+const loginWindows = new Map();
 
 function normalizeEmail(email) {
   return (email ?? '').toString().trim().toLowerCase();
@@ -505,11 +511,6 @@ function normalizeEmail(email) {
 function normalizeDisplayName(name) {
   return (name ?? '').toString().trim().replace(/\s+/g, ' ');
 }
-
-function pruneExpiredSignups() {
-  // Mocking for now, as pending signups should also move to DB
-}
-
 
 async function hashPassword(password) {
   return await bcrypt.hash(password, 10);
@@ -662,11 +663,6 @@ async function findPendingSignup(email) {
   return rows[0] || null;
 }
 
-async function removePendingSignup(email) {
-  const normalized = normalizeEmail(email);
-  await db.query('DELETE FROM otp_verifications WHERE email = ?', [normalized]);
-}
-
 async function removePendingSignupById(id) {
   await db.query('DELETE FROM otp_verifications WHERE id = ?', [id]);
 }
@@ -707,6 +703,7 @@ async function issueSignupCode({ email, name }) {
   const stamped = await stampSignupCode(email, code);
   try {
     const delivery = await sendVerificationMail({ email, name, code });
+    await db.query('DELETE FROM otp_verifications WHERE email=? AND id!=?', [email, stamped.id]);
     return otpDeliveryResponse(email, delivery, code, stamped.expiresAt);
   } catch (err) {
     try {
@@ -833,12 +830,10 @@ function otpMatches(expected, received) {
     && crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
 }
 
-function createSession(user) {
+async function createSession(user, connection = db) {
   const token = crypto.randomBytes(32).toString('hex');
-  sessionTokens.set(token, {
-    userId: user.id,
-    createdAt: Date.now(),
-  });
+  await connection.query('INSERT INTO auth_sessions (token_hash,user_id,expires_at) VALUES (?,?,?)',
+    [digest(token), user.id, new Date(Date.now() + 7 * 86400000)]);
   return token;
 }
 
@@ -851,13 +846,12 @@ function getAuthToken(req) {
 
 // --- DATABASE MIDDLEWARE ---
 async function currentUserFromRequest(req) {
+  if (req.authUser) return req.authUser;
   const token = getAuthToken(req);
-  if (!token) return null;
-  const session = sessionTokens.get(token);
-  if (!session) return null;
-
-  const [rows] = await db.query('SELECT * FROM users WHERE id = ?', [session.userId]);
-  return rows[0] || null;
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
+  const [rows] = await db.query('SELECT u.* FROM users u JOIN auth_sessions a ON a.user_id=u.id WHERE a.token_hash=? AND a.expires_at>UTC_TIMESTAMP(3)', [digest(token)]);
+  req.authUser = rows[0] || null;
+  return req.authUser;
 }
 
 
@@ -881,7 +875,10 @@ function publicUser(user) {
 
 
 
-app.get('/api/auth/me', async (req, res) => {
+mountTravelApi(app, { db, requireAuth, requireAdmin, currentUserFromRequest });
+mountAccountApi(app, { db, requireAuth, currentUserFromRequest, publicUser, upload, isValidPassword, hashPassword, verifyPassword, getAuthToken, sendVerificationMail, reserveOtpRequest, sendRateLimitResponse, isDevelopmentMode });
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
   const user = await currentUserFromRequest(req);
   if (!user) {
     return res.status(401).json({ error: 'Not signed in' });
@@ -977,16 +974,17 @@ app.post('/api/auth/signup/verify-code', async (req, res) => {
       });
     }
 
-    await db.query('UPDATE otp_verifications SET verified = 1 WHERE id = ?', [signup.id]);
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    await db.query('UPDATE otp_verifications SET verified=1, verification_hash=? WHERE id=?', [digest(verificationToken), signup.id]);
     await clearOtpAttempts(email);
-    res.json({ ok: true, nextStep: 'set-password', email });
+    res.json({ ok: true, nextStep: 'set-password', email, verificationToken });
   } catch (err) { res.status(500).json({ error: 'Verify failed' }); }
 });
 
 app.post('/api/auth/signup/set-password', async (req, res) => {
   try {
     const email = normalizeEmail(req.body?.email);
-    const { password, confirmPassword, name } = req.body ?? {};
+    const { password, confirmPassword, name, verificationToken } = req.body ?? {};
 
     if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'valid email is required' });
@@ -1001,6 +999,9 @@ app.post('/api/auth/signup/set-password', async (req, res) => {
     const signup = await findPendingSignup(email);
     if (!signup || !signup.verified) return res.status(400).json({ error: 'Please verify code first' });
     if (isSignupCodeExpired(signup)) return res.status(410).json({ error: 'Verification expired; request a new code' });
+    if (typeof verificationToken !== 'string' || !/^[a-f0-9]{64}$/.test(verificationToken) || signup.verification_hash !== digest(verificationToken)) {
+      return res.status(403).json({ error: 'Verify your code in this session before setting a password' });
+    }
 
     if (await findUserByEmail(email)) {
       return res.status(409).json({ error: 'An account already exists with this email' });
@@ -1012,17 +1013,17 @@ app.post('/api/auth/signup/set-password', async (req, res) => {
     }
 
     const hash = await hashPassword(password);
-    const [result] = await db.query(
-      'INSERT INTO users (name, email, password_hash, is_verified) VALUES (?, ?, ?, 1)',
-      [normalizedName, email, hash]
-    );
-
-    const user = { id: result.insertId, name: normalizedName, email, role: 'user' };
-    const token = createSession(user);
-
-    await removePendingSignup(email);
+    const result = await transaction(db, async conn => {
+      const [[verified]] = await conn.query('SELECT *,expires_at>UTC_TIMESTAMP() AS valid FROM otp_verifications WHERE id=? FOR UPDATE', [signup.id]);
+      if (!verified || !verified.valid || !verified.verified || verified.verification_hash !== digest(verificationToken)) throw new Error('Verification was consumed or expired');
+      const [insert] = await conn.query('INSERT INTO users (name,email,password_hash,is_verified) VALUES (?,?,?,1)', [normalizedName, email, hash]);
+      const [[user]] = await conn.query('SELECT * FROM users WHERE id=?', [insert.insertId]);
+      const token = await createSession(user, conn);
+      await conn.query('DELETE FROM otp_verifications WHERE email=?', [email]);
+      return { user, token };
+    });
     await clearOtpAttempts(email);
-    res.json({ ok: true, token, user: publicUser(user) });
+    res.json({ ok: true, token: result.token, user: publicUser(result.user) });
   } catch (err) { res.status(500).json({ error: 'Set password failed' }); }
 });
 
@@ -1033,22 +1034,27 @@ app.post('/api/auth/login', async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = req.body?.password;
 
-    if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
-
-    const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
-    const user = users[0];
-
-    console.log(`[auth] login attempt for ${email}, user found: ${!!user}`);
-
-    if (!user) return res.status(401).json({ error: 'invalid email or password' });
-
-    const isValid = await verifyPassword(password, user);
-    if (!isValid) {
-      return res.status(401).json({ error: 'invalid email or password' });
+    if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || typeof password !== 'string' || !password || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'Valid email and password are required' });
+    const now = Date.now();
+    for (const [key, entry] of loginWindows) if (entry.expires <= now) loginWindows.delete(key);
+    const keys = [`ip:${req.ip}`, `email:${email}`];
+    for (const key of keys) {
+      const entry = loginWindows.get(key) || { count: 0, expires: now + 15 * 60000 };
+      entry.count++;
+      loginWindows.set(key, entry);
+      if (entry.count > (key.startsWith('ip:') ? 60 : 15)) {
+        res.setHeader('Retry-After', Math.ceil((entry.expires - now) / 1000));
+        return res.status(429).json({ error: 'Too many sign in attempts. Try again later.' });
+      }
     }
 
-    const token = createSession(user);
-    res.json({ ok: true, token, user: publicUser(user) });
+    const result = await transaction(db, async conn => {
+      const [[user]] = await conn.query('SELECT * FROM users WHERE email=? FOR UPDATE', [email]);
+      if (!user || !await verifyPassword(password, user)) return null;
+      return { user, token: await createSession(user, conn) };
+    });
+    if (!result) return res.status(401).json({ error: 'invalid email or password' });
+    res.json({ ok: true, token: result.token, user: publicUser(result.user) });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Server error' });
@@ -1057,16 +1063,21 @@ app.post('/api/auth/login', async (req, res) => {
 
 
 
-app.post('/api/auth/logout', (req, res) => {
-  const token = getAuthToken(req);
-  if (token) sessionTokens.delete(token);
-  return res.json({ ok: true });
+app.post('/api/auth/logout', async (req, res, next) => {
+  try {
+    const token = getAuthToken(req);
+    if (token) await db.query('DELETE FROM auth_sessions WHERE token_hash=?', [digest(token)]);
+    return res.json({ ok: true });
+  } catch (err) { next(err); }
 });
 
-app.post('/api/hotels/search', async (req, res) => {
+app.post(['/api/hotels/search', '/api/stays/search'], async (req, res) => {
   try {
     const { city, destinationName, category, checkin, checkout } = req.body;
 
+    for (const key of ['city','destinationName','category']) {
+      if (req.body?.[key] !== undefined && (typeof req.body[key] !== 'string' || req.body[key].length > 150)) return res.status(400).json({ error: `Invalid ${key}` });
+    }
     const hotelCatalogs = {
       "Cox's Bazar": [
         { name: 'Sayeman Beach Resort', url: 'https://www.google.com/search?q=Sayeman+Beach+Resort+Coxs+Bazar', price: 3200, rating: 4.8 },
@@ -1118,123 +1129,30 @@ app.post('/api/hotels/search', async (req, res) => {
       ]
     };
 
-    const categoryCatalogs = {
-      beach: [
-        { name: 'Beach View Lodge', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} beach lodge`)}`, price: 2400, rating: 4.4 },
-        { name: 'Sea Breeze Resort', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} sea breeze resort`)}`, price: 3200, rating: 4.6 },
-        { name: 'Coastal Paradise Hotel', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} coastal paradise hotel`)}`, price: 1800, rating: 4.2 },
-        { name: 'Resort by the Bay', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} resort by the bay`)}`, price: 4200, rating: 4.7 },
-        { name: 'Sea Pearl Inn', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} sea pearl inn`)}`, price: 2600, rating: 4.5 }
-      ],
-      nature: [
-        { name: 'Eco Valley Resort', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} eco valley resort`)}`, price: 1900, rating: 4.4 },
-        { name: 'Hill View Cottage', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} hill view cottage`)}`, price: 1600, rating: 4.3 },
-        { name: 'Forest Retreat', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} forest retreat`)}`, price: 2200, rating: 4.5 },
-        { name: 'Trailside Lodge', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} trailside lodge`)}`, price: 1400, rating: 4.1 },
-        { name: 'Nature Nest Resort', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} nature nest resort`)}`, price: 2600, rating: 4.6 }
-      ],
-      history: [
-        { name: 'Heritage Garden Hotel', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} heritage garden hotel`)}`, price: 1700, rating: 4.3 },
-        { name: 'Old Town Inn', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} old town inn`)}`, price: 1400, rating: 4.1 },
-        { name: 'City Heritage Residency', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} city heritage residency`)}`, price: 2300, rating: 4.5 },
-        { name: 'Museum View Hotel', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} museum view hotel`)}`, price: 2000, rating: 4.4 },
-        { name: 'Classic Stay Bangladesh', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} classic stay`)}`, price: 1500, rating: 4.0 }
-      ],
-      religious: [
-        { name: 'Pilgrim Rest House', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} pilgrim rest house`)}`, price: 1200, rating: 4.1 },
-        { name: 'Sacred Stay Hotel', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} sacred stay hotel`)}`, price: 1600, rating: 4.2 },
-        { name: 'Devotional Residency', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} devotional residency`)}`, price: 1800, rating: 4.3 },
-        { name: 'Faith Guest House', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} faith guest house`)}`, price: 1000, rating: 4.0 },
-        { name: 'Peace Hotel', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} peace hotel`)}`, price: 1400, rating: 4.1 }
-      ],
-      city: [
-        { name: 'Business Class Hotel', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} business class hotel`)}`, price: 2600, rating: 4.4 },
-        { name: 'City Center Suites', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} city center suites`)}`, price: 3500, rating: 4.6 },
-        { name: 'Urban Stay', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} urban stay`)}`, price: 1800, rating: 4.2 },
-        { name: 'Metro Lodge', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} metro lodge`)}`, price: 1500, rating: 4.1 },
-        { name: 'Capital Comfort Inn', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} capital comfort inn`)}`, price: 2200, rating: 4.3 }
-      ],
-      wetland: [
-        { name: 'Haor View Homestay', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} haor view homestay`)}`, price: 900, rating: 4.0 },
-        { name: 'Wetland Eco Lodge', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} wetland eco lodge`)}`, price: 1600, rating: 4.2 },
-        { name: 'Riverbank Cottage', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} riverbank cottage`)}`, price: 1200, rating: 4.1 },
-        { name: 'Boat House Stay', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} boat house stay`)}`, price: 1100, rating: 4.1 },
-        { name: 'Marshland Resort', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} marshland resort`)}`, price: 1800, rating: 4.3 }
-      ],
-      culture: [
-        { name: 'Cultural Plaza Hotel', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} cultural plaza hotel`)}`, price: 1900, rating: 4.3 },
-        { name: 'Artisan Inn', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} artisan inn`)}`, price: 1400, rating: 4.1 },
-        { name: 'Festival Residency', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} festival residency`)}`, price: 2100, rating: 4.4 },
-        { name: 'Local Heritage Lodge', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} local heritage lodge`)}`, price: 1200, rating: 4.0 },
-        { name: 'Craftsman Stay', url: `https://www.google.com/search?q=${encodeURIComponent(`${city || destinationName || 'Bangladesh'} craftsman stay`)}`, price: 1500, rating: 4.1 }
-      ]
-    };
+    const cityKey = [destinationName, city].filter(value => typeof value === 'string').map(value => Object.keys(hotelCatalogs).find(key => key.toLowerCase() === value.trim().toLowerCase())).find(Boolean);
+    const catalog = cityKey ? hotelCatalogs[cityKey] : [];
 
-    const defaultHotels = [
-      { name: `Agoda Hotels in ${city || destinationName || 'Bangladesh'}`, url: `https://www.agoda.com/search?text=${encodeURIComponent(city || destinationName || 'Bangladesh')}`, price: 2400, rating: 4.4 },
-      { name: `GoZayan Hotels in ${city || destinationName || 'Bangladesh'}`, url: 'https://gozayan.com/hotel', price: 1800, rating: 4.2 },
-      { name: `ShareTrip Hotels in ${city || destinationName || 'Bangladesh'}`, url: 'https://sharetrip.net/hotel', price: 2200, rating: 4.3 },
-      { name: `Booking.com in ${city || destinationName || 'Bangladesh'}`, url: `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(city || destinationName || 'Bangladesh')}`, price: 2600, rating: 4.5 },
-      { name: `Kayak Hotels in ${city || destinationName || 'Bangladesh'}`, url: `https://www.kayak.com/hotels/${encodeURIComponent(city || destinationName || 'Bangladesh')}`, price: 2000, rating: 4.2 }
-    ];
-
-    const cityKey = [destinationName, city].find((value) => value && hotelCatalogs[value]);
-    const catalog = cityKey ? hotelCatalogs[cityKey] : (category && categoryCatalogs[String(category).toLowerCase()]) || defaultHotels;
-
-    const parseDate = (value) => {
-      if (!value) return null;
-      const date = new Date(`${value}T00:00:00`);
-      return Number.isNaN(date.getTime()) ? null : date;
-    };
-
-    const stableHash = (value) => {
-      let hash = 0;
-      for (let index = 0; index < value.length; index += 1) {
-        hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-      }
-      return hash;
-    };
-
-    const checkinDate = parseDate(checkin);
-    const checkoutDate = parseDate(checkout);
-    const tripDays = checkinDate && checkoutDate ? Math.max(1, Math.ceil((checkoutDate - checkinDate) / 86400000)) : 1;
-    const peakSeason = checkinDate ? [10, 11, 0, 1].includes(checkinDate.getMonth()) : false;
-
-    const hotels = catalog.map((hotel) => {
-      const seed = stableHash([city || '', destinationName || '', category || '', hotel.name, checkin || '', checkout || ''].join('|'));
-      const roll = seed % 100;
-      let availability = 'available';
-      if (roll < 18) availability = 'unavailable';
-      else if (roll < 45) availability = 'limited';
-
-      if (peakSeason && ['beach', 'city'].includes(String(category || '').toLowerCase()) && availability === 'available' && roll % 3 === 0) {
-        availability = 'limited';
-      }
-
-      if (tripDays >= 5 && availability === 'available' && roll % 4 === 0) {
-        availability = 'limited';
-      }
-
-      let note = 'Rooms available for the selected dates.';
-      if (availability === 'limited') note = 'Limited rooms left for the selected dates.';
-      if (availability === 'unavailable') note = 'Booked for part or all of the selected dates. Try an alternative.';
-
-      return {
-        ...hotel,
-        availability,
-        note,
-      };
-    });
-
-    hotels.sort((a, b) => {
-      const order = { available: 0, limited: 1, unavailable: 2 };
-      const statusDiff = (order[a.availability] ?? 3) - (order[b.availability] ?? 3);
-      if (statusDiff !== 0) return statusDiff;
-      return (a.price || 0) - (b.price || 0);
-    });
-
-    res.json({ hotels });
-  } catch (err) { res.status(500).json({ error: 'Search failed' }); }
+    const pricing = require('./pricing');
+    const persons = pricing.integer(req.body?.persons === undefined ? 1 : req.body.persons, 'persons');
+    if ((checkin && !checkout) || (checkout && !checkin)) throw new pricing.ApiError(400, 'Provide both checkin and checkout');
+    let nights = 1;
+    if (checkin || checkout) {
+      pricing.dateOnly(checkin, 'checkin', false);
+      pricing.dateOnly(checkout, 'checkout', false);
+      if (checkin < pricing.today() || checkout <= checkin) throw new pricing.ApiError(400, 'Choose valid future stay dates');
+      nights = Math.round((Date.parse(checkout) - Date.parse(checkin)) / 86400000);
+      if (nights > 30) throw new pricing.ApiError(400, 'Stay must be 30 nights or less');
+    }
+    const maxPrice = req.body?.max_price === undefined ? Infinity : pricing.integer(req.body.max_price, 'max_price', 1, 1000000);
+    const rooms = Math.ceil(persons / 2);
+    const hotels = catalog.filter(h => h.price <= maxPrice).map(({ rating, ...h }) => ({
+      ...h, id: crypto.createHash('sha256').update(h.name + '|' + (city || '')).digest('hex').slice(0,16),
+      currency: 'BDT', estimate_only: true, availability: 'unknown',
+      nights, rooms, total_estimate: h.price * rooms * nights,
+      note: 'Catalog estimate per room per night. Confirm rates and availability with the property.',
+    })).sort((a,b) => a.price - b.price);
+    res.json({ hotels, source: 'project-catalog', live_availability: false, currency: 'BDT', nights, rooms });
+  } catch (err) { res.status(err.status || 500).json({ error: err.status ? err.message : 'Search failed' }); }
 });
 
 app.get('/api/reviews', async (req, res) => {
@@ -1580,14 +1498,6 @@ app.get('/api/admin/bookings', requireAdmin, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Bookings failed' }); }
 });
 
-app.put('/api/admin/bookings/:id/status', requireAdmin, async (req, res) => {
-  try {
-    await db.query('UPDATE bookings SET status = ? WHERE id = ?', [req.body.status, req.params.id]);
-    res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: 'Update failed' }); }
-});
-
-
 // --- USER DASHBOARD APIS ---
 
 app.get('/api/user/dashboard', requireAuth, async (req, res) => {
@@ -1713,158 +1623,6 @@ app.get('/api/user/guides', requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: 'Guides failed' }); }
 });
 
-app.get('/api/user/bookings', requireAuth, async (req, res) => {
-  try {
-    const user = await currentUserFromRequest(req);
-    const [rows] = await db.query(`
-      SELECT b.*, s.name as spot_name
-      FROM bookings b
-      LEFT JOIN spots s ON b.spot_id = s.id
-      WHERE b.user_id = ?
-      ORDER BY b.created_at DESC
-    `, [user.id]);
-    res.json({ bookings: rows });
-  } catch (err) { res.status(500).json({ error: 'Bookings failed' }); }
-});
-
-// --- BOOKING CREATION ---
-app.post('/api/bookings', requireAuth, async (req, res) => {
-  try {
-    const user = await currentUserFromRequest(req);
-    const { spot_id, booking_date, persons } = req.body ?? {};
-    const spotId = parsePositiveInteger(spot_id);
-    const numPersons = parsePositiveInteger(persons);
-
-    if (!spotId) return res.status(400).json({ error: 'spot_id must be a positive integer' });
-    if (!numPersons || numPersons > MAX_BOOKING_PERSONS) {
-      return res.status(400).json({ error: `persons must be an integer between 1 and ${MAX_BOOKING_PERSONS}` });
-    }
-    if (!isValidDateOnly(booking_date)) {
-      return res.status(400).json({ error: 'booking_date must be a valid date in YYYY-MM-DD format' });
-    }
-    if (booking_date <= currentDateInTimeZone(BOOKING_TIME_ZONE)) {
-      return res.status(400).json({ error: 'booking_date must be a future date' });
-    }
-
-    // Look up spot
-    const [spotRows] = await db.query('SELECT id, name, budget_category FROM spots WHERE id = ?', [spotId]);
-    if (spotRows.length === 0) return res.status(404).json({ error: 'Spot not found' });
-    const spot = spotRows[0];
-
-    // Prevent duplicate active booking for same user + spot + date
-    const [existing] = await db.query(
-      "SELECT id FROM bookings WHERE user_id = ? AND spot_id = ? AND booking_date = ? AND status != 'cancelled'",
-      [user.id, spotId, booking_date]
-    );
-    if (existing.length > 0) {
-      return res.status(409).json({ error: 'You already have an active booking for this spot on this date.' });
-    }
-
-    // Calculate estimated price based on budget category and persons
-    const baseRate = spot.budget_category === 'High' ? 1700 : (spot.budget_category === 'Mid' ? 1250 : 800);
-    const price = baseRate * numPersons;
-
-    const [result] = await db.query(
-      "INSERT INTO bookings (user_id, spot_id, type, target_name, price, booking_date, persons, status) VALUES (?, ?, 'package', ?, ?, ?, ?, 'confirmed')",
-      [user.id, spotId, spot.name, price, booking_date, numPersons]
-    );
-
-    res.status(201).json({
-      ok: true,
-      id: result.insertId,
-      message: `Booking confirmed for ${spot.name} on ${booking_date}`,
-      booking: {
-        id: result.insertId,
-        spot_name: spot.name,
-        price,
-        booking_date,
-        status: 'confirmed',
-        persons: numPersons
-      }
-    });
-  } catch (err) {
-    console.error('Create booking error:', err);
-    res.status(500).json({ error: 'Booking failed' });
-  }
-});
-
-// --- BOOKING CANCELLATION ---
-app.delete('/api/user/bookings/:id', requireAuth, async (req, res) => {
-  try {
-    const user = await currentUserFromRequest(req);
-
-    // Get the booking
-    const [rows] = await db.query('SELECT * FROM bookings WHERE id = ? AND user_id = ?', [req.params.id, user.id]);
-    if (rows.length === 0) return res.status(404).json({ error: 'Booking not found' });
-
-    const booking = rows[0];
-
-    if (booking.status === 'cancelled') {
-      return res.status(400).json({ error: 'This booking is already cancelled.' });
-    }
-
-    // Check 24-hour cancellation window: booking_date must be at least 24h away
-    if (booking.booking_date) {
-      const bookingDate = new Date(booking.booking_date);
-      const bookingDateOnly = new Date(bookingDate.getFullYear(), bookingDate.getMonth(), bookingDate.getDate());
-      const now = new Date();
-      const todayDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-      if (bookingDateOnly < todayDateOnly) {
-        return res.status(400).json({
-          error: 'Booking date has already passed. Completed bookings cannot be cancelled.'
-        });
-      }
-
-      const hoursUntilBooking = (bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60);
-
-      if (hoursUntilBooking < 24) {
-        return res.status(400).json({
-          error: 'Cancellation is not allowed within 24 hours of the booking date.'
-        });
-      }
-    }
-
-    await db.query("UPDATE bookings SET status = 'cancelled' WHERE id = ?", [req.params.id]);
-    res.json({ ok: true, message: 'Booking cancelled successfully.' });
-  } catch (err) {
-    console.error('Cancel booking error:', err);
-    res.status(500).json({ error: 'Cancellation failed' });
-  }
-});
-app.put('/api/auth/profile', requireAuth, upload.single('profile_pic'), async (req, res) => {
-  try {
-    const user = await currentUserFromRequest(req);
-    const { name, phone, address, password } = req.body;
-    const profile_pic = req.file ? req.file.filename : undefined;
-
-    let query = 'UPDATE users SET name=?, phone=?, address=?';
-    let params = [name, phone || '', address || ''];
-
-    if (profile_pic) {
-      query += ', profile_pic=?';
-      params.push(profile_pic);
-    }
-
-    if (password !== undefined && password !== '') {
-      if (!isValidPassword(password)) {
-        return res.status(400).json({ error: 'Password must be at least 8 characters and at most 72 UTF-8 bytes' });
-      }
-      const hash = await hashPassword(password);
-      query += ', password_hash=?';
-      params.push(hash);
-    }
-
-    query += ' WHERE id=?';
-    params.push(user.id);
-
-    await db.query(query, params);
-
-    const [updated] = await db.query('SELECT * FROM users WHERE id = ?', [user.id]);
-    res.json({ ok: true, user: publicUser(updated[0]) });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
 app.put('/api/user/reviews/:id', requireAuth, async (req, res) => {
   try {
     const user = await currentUserFromRequest(req);
@@ -1901,7 +1659,8 @@ app.use((err, req, res, next) => {
       : 'Invalid image upload';
     return res.status(status).json({ error: message, code: err.code });
   }
-  return next(err);
+  console.error('[api]', err.message);
+  return res.status(err.status || 500).json({ error: err.type === 'entity.parse.failed' ? 'Invalid JSON body' : 'Unable to complete request' });
 });
 
 const seedDatabase = require('./seed');
@@ -1923,7 +1682,8 @@ async function startServer() {
   try {
     await seedDatabase();
     await ensureOtpAttemptSecurityTable();
-    app.listen(PORT, () => {
+    await require('./migrations')(db);
+    return app.listen(PORT, () => {
       console.log(`API server listening on http://localhost:${PORT}`);
     });
   } catch (err) {

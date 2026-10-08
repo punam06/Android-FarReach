@@ -43,6 +43,7 @@ class ApiClient {
   final String baseUrl;
   final http.Client _client;
   String? token;
+  final Map<String, String> _signupProofs = {};
 
   static String _resolveBaseUrl(String? override) {
     final candidate =
@@ -203,13 +204,18 @@ class ApiClient {
   }
 
   Future<void> verifySignup(String email, String code) async {
-    await _decode(
+    final payload = await _decode(
       () => _client.post(
         _uri('/api/auth/signup/verify-code'),
         headers: _headers,
         body: jsonEncode({'email': email.trim(), 'code': code.trim()}),
       ),
     );
+    final proof = payload['verificationToken']?.toString();
+    if (proof == null || proof.isEmpty) {
+      throw const ApiFailure('Verification proof was not returned.');
+    }
+    _signupProofs[email.trim().toLowerCase()] = proof;
   }
 
   Future<AuthResult> finishSignup({
@@ -225,9 +231,11 @@ class ApiClient {
           'name': name.trim(),
           'email': email.trim(),
           'password': password,
+          'verificationToken': _signupProofs[email.trim().toLowerCase()],
         }),
       ),
     );
+    _signupProofs.remove(email.trim().toLowerCase());
     return _authResult(payload);
   }
 
@@ -325,6 +333,60 @@ class ApiClient {
   Future<void> cancelBooking(int id) async {
     await _decode(
       () => _client.delete(_uri('/api/user/bookings/$id'), headers: _headers),
+    );
+  }
+
+  Future<Map<String, dynamic>> requestJson(
+    String path, {
+    String method = 'GET',
+    Map<String, dynamic>? body,
+  }) => _decode(() {
+    final uri = _uri(path);
+    return switch (method) {
+      'POST' => _client.post(
+        uri,
+        headers: _headers,
+        body: jsonEncode(body ?? {}),
+      ),
+      'PUT' => _client.put(
+        uri,
+        headers: _headers,
+        body: jsonEncode(body ?? {}),
+      ),
+      'DELETE' => _client.delete(uri, headers: _headers),
+      _ => _client.get(uri, headers: _headers),
+    };
+  });
+
+  Future<AppUser> updateProfile({
+    required String name,
+    required String phone,
+    required String address,
+    String? password,
+    String? currentPassword,
+  }) async {
+    final payload = await requestJson(
+      '/api/auth/profile',
+      method: 'PUT',
+      body: {
+        'name': name,
+        'phone': phone,
+        'address': address,
+        if (password?.isNotEmpty == true) 'password': password,
+        if (password?.isNotEmpty == true) 'current_password': currentPassword,
+      },
+    );
+    return AppUser.fromJson(Map<String, dynamic>.from(payload['user'] as Map));
+  }
+
+  Future<Booking> updateBooking(int id, String date, int persons) async {
+    final payload = await requestJson(
+      '/api/user/bookings/$id',
+      method: 'PUT',
+      body: {'booking_date': date, 'persons': persons},
+    );
+    return Booking.fromJson(
+      Map<String, dynamic>.from(payload['booking'] as Map),
     );
   }
 

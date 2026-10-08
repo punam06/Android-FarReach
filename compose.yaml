@@ -1,0 +1,45 @@
+services:
+  db:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: torisom_db
+      MYSQL_USER: farreach
+      MYSQL_PASSWORD: ${DB_PASSWORD:-farreach-local-only}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-farreach-root-local-only}
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - '127.0.0.1:3308:3306'
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./server/database.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h localhost -u root --silent']
+      interval: 5s
+      timeout: 5s
+      retries: 40
+  api:
+    build: .
+    environment:
+      NODE_ENV: development
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_USER: farreach
+      DB_PASSWORD: ${DB_PASSWORD:-farreach-local-only}
+      DB_NAME: torisom_db
+      PORT: 3000
+      APP_API_BASE_URL: http://127.0.0.1:3000
+    ports:
+      - '127.0.0.1:3000:3000'
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - uploaded-images:/app/public/spot-pictures
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:3000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+volumes:
+  mysql-data:
+  uploaded-images:
