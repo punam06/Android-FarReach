@@ -340,21 +340,23 @@ class ApiClient {
     String path, {
     String method = 'GET',
     Map<String, dynamic>? body,
+    Map<String, String> headers = const {},
   }) => _decode(() {
     final uri = _uri(path);
+    final requestHeaders = {...headers, ..._headers};
     return switch (method) {
       'POST' => _client.post(
         uri,
-        headers: _headers,
+        headers: requestHeaders,
         body: jsonEncode(body ?? {}),
       ),
       'PUT' => _client.put(
         uri,
-        headers: _headers,
+        headers: requestHeaders,
         body: jsonEncode(body ?? {}),
       ),
-      'DELETE' => _client.delete(uri, headers: _headers),
-      _ => _client.get(uri, headers: _headers),
+      'DELETE' => _client.delete(uri, headers: requestHeaders),
+      _ => _client.get(uri, headers: requestHeaders),
     };
   });
 

@@ -11,16 +11,18 @@ test('FarReach API with real MySQL and independent server processes', { timeout:
   const database = `farreach_test_${crypto.randomBytes(8).toString('hex')}`;
   const config = { host: process.env.TEST_DB_HOST || '127.0.0.1', port: Number(process.env.TEST_DB_PORT || 3308), user: process.env.TEST_DB_USER || 'root', password: process.env.TEST_DB_PASSWORD || 'farreach-root-local-only', multipleStatements: true };
   const admin = await mysql.createConnection(config);
+  const productionUser = `trip_test_${crypto.randomBytes(8).toString('hex')}`;
   let worker;
   t.after(async () => {
     if (worker && worker.exitCode === null) { worker.kill(); await new Promise(resolve => worker.once('exit', resolve)); }
     await admin.query(`DROP DATABASE IF EXISTS \`${database}\``);
+    await admin.query("DROP USER IF EXISTS ?@'%'", [productionUser]);
     await admin.end();
   });
   await admin.query(`CREATE DATABASE \`${database}\``);
   await admin.query(`USE \`${database}\``);
   await admin.query(fs.readFileSync(path.join(__dirname, '../database.sql'), 'utf8'));
-  const env = { ...process.env, NODE_ENV: 'development', DB_HOST: config.host, DB_PORT: String(config.port), DB_USER: config.user, DB_PASSWORD: config.password, DB_NAME: database, PORT: '0', SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '' };
+  const env = { ...process.env, NODE_ENV: 'development', DB_HOST: config.host, DB_PORT: String(config.port), DB_USER: config.user, DB_PASSWORD: config.password, DB_NAME: database, PORT: '0', SMTP_HOST: '', SMTP_USER: '', SMTP_PASS: '', GEMINI_API_KEY: '' };
   let base;
   async function start() {
     worker = fork(path.join(__dirname, 'http-worker.cjs'), [], { env, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
@@ -35,8 +37,8 @@ test('FarReach API with real MySQL and independent server processes', { timeout:
     base = `http://127.0.0.1:${port}`;
   }
   await start();
-  async function call(method, route, body, token, expected = 200) {
-    const result = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+  async function call(method, route, body, token, expected = 200, headers = {}) {
+    const result = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...headers }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
     const payload = await result.json();
     assert.equal(result.status, expected, `${method} ${route}: ${JSON.stringify(payload)}`);
     return payload;
@@ -167,6 +169,81 @@ test('FarReach API with real MySQL and independent server processes', { timeout:
     await call('DELETE','/api/chatbot/messages',undefined,alice.token);
     assert.equal((await call('GET','/api/chatbot/messages',undefined,alice.token)).messages.length,0);
   });
+  const tripBody = () => ({ service: 'package', provider: 'trip_com', origin: 'Dhaka', destination: 'Cox’s Bazar', start_date: future(20), end_date: future(23), adults: 2, children: 1, budget_paisa: 5000000, contact_name: 'Alice', contact_phone: '+8801700000000', requirements: 'Family room; airport transfer' });
+  const quoteBody = version => ({ version, line_items: [{ label: 'Family accommodation', quantity: 3, unit_paisa: 400000 }, { label: 'Transfer including taxes', quantity: 1, unit_paisa: 150000 }], itinerary: 'Three nights and return airport transfer.', cancellation_policy: 'Free cancellation before supplier confirmation. Later cancellations subject to supplier policy.', valid_hours: 24 });
+  let trip, quote;
+  await t.test('trip requests validate input, scope access and serialize idempotent retries', async () => {
+    const provider = await call('GET', '/api/travel/providers');
+    assert.ok(provider.providers.every(item => item.live_booking === false));
+    const body = tripBody(), key = crypto.randomUUID(), headers = { 'Idempotency-Key': key };
+    await call('POST', '/api/trip-requests', body, null, 401, headers);
+    await call('POST', '/api/trip-requests', body, alice.token, 400);
+    await call('POST', '/api/trip-requests', { ...body, provider: '__proto__' }, alice.token, 400, headers);
+    await call('POST', '/api/trip-requests', { ...body, start_date: '2027-02-30' }, alice.token, 400, headers);
+    await call('POST', '/api/trip-requests', { ...body, adults: 20, children: 1 }, alice.token, 400, headers);
+    const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(base + '/api/trip-requests', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alice.token}`, ...headers }, body: JSON.stringify(body) })));
+    assert.deepEqual(responses.map(r => r.status).sort(), [200, 200, 200, 201]);
+    const payloads = await Promise.all(responses.map(r => r.json()));
+    trip = payloads[0].trip;
+    assert.ok(payloads.every(result => result.trip.id === trip.id));
+    assert.equal(trip.status, 'requested');
+    assert.equal(trip.live_supplier_booking, false);
+    assert.equal(trip.request_key, undefined);
+    await call('POST', '/api/trip-requests', { ...body, destination: 'Sylhet' }, alice.token, 409, headers);
+    await call('GET', `/api/user/trip-requests/${trip.id}`, undefined, bob.token, 404);
+    await call('GET', '/api/admin/trip-requests', undefined, alice.token, 403);
+    const detail = await call('GET', `/api/user/trip-requests/${trip.id}`, undefined, alice.token);
+    assert.equal(detail.events.length, 1);
+    assert.equal((await call('GET', '/api/user/trip-requests', undefined, bob.token)).pagination.total, 0);
+  });
+  await t.test('trip quotes enforce expiry, exact pricing, accepted terms and optimistic concurrency', async () => {
+    await call('POST', `/api/admin/trip-requests/${trip.id}/confirm`, { version: trip.version, supplier_reference: 'TEST', confirmation_details: 'Test' }, staff.token, 409);
+    const result = await call('POST', `/api/admin/trip-requests/${trip.id}/quotes`, quoteBody(trip.version), staff.token, 201);
+    trip = result.trip; quote = result.quote;
+    assert.equal(quote.total_paisa, 1350000);
+    await call('POST', `/api/user/trip-requests/${trip.id}/accept`, { version: trip.version, quote_id: quote.id, accept_terms: false }, alice.token, 400);
+    await call('POST', `/api/user/trip-requests/${trip.id}/accept`, { version: trip.version - 1, quote_id: quote.id, accept_terms: true }, alice.token, 409);
+    await admin.query('UPDATE trip_quotes SET expires_at=DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 MINUTE) WHERE id=?', [quote.id]);
+    await call('POST', `/api/user/trip-requests/${trip.id}/accept`, { version: trip.version, quote_id: quote.id, accept_terms: true }, alice.token, 409);
+    const revised = await call('POST', `/api/admin/trip-requests/${trip.id}/quotes`, quoteBody(trip.version), staff.token, 201);
+    trip = revised.trip;
+    await call('POST', `/api/user/trip-requests/${trip.id}/accept`, { version: trip.version, quote_id: quote.id, accept_terms: true }, alice.token, 409);
+    quote = revised.quote;
+    trip = (await call('POST', `/api/user/trip-requests/${trip.id}/accept`, { version: trip.version, quote_id: quote.id, accept_terms: true, total_paisa: 1 }, alice.token)).trip;
+    assert.equal(trip.status, 'awaiting_confirmation');
+    await call('POST', `/api/admin/trip-requests/${trip.id}/quotes`, quoteBody(trip.version), staff.token, 409);
+  });
+  await t.test('supplier confirmation and cancellation require explicit operator transitions', async () => {
+    await call('POST', `/api/admin/trip-requests/${trip.id}/confirm`, { version: trip.version }, staff.token, 400);
+    trip = (await call('POST', `/api/admin/trip-requests/${trip.id}/confirm`, { version: trip.version, supplier_reference: 'OPERATOR-TEST-001', confirmation_details: 'Operator test confirmation; no real supplier was contacted.' }, staff.token)).trip;
+    assert.equal(trip.status, 'confirmed');
+    trip = (await call('POST', `/api/user/trip-requests/${trip.id}/cancel`, { version: trip.version, reason: 'Plans changed' }, alice.token)).trip;
+    assert.equal(trip.status, 'cancellation_requested');
+    await call('POST', `/api/admin/trip-requests/${trip.id}/confirm`, { version: trip.version, supplier_reference: 'AGAIN', confirmation_details: 'Again' }, staff.token, 409);
+    trip = (await call('POST', `/api/admin/trip-requests/${trip.id}/close`, { version: trip.version, status: 'cancelled', reason: 'Supplier cancellation recorded; no payment collected.' }, staff.token)).trip;
+    assert.equal(trip.status, 'cancelled');
+    const detail = await call('GET', `/api/user/trip-requests/${trip.id}`, undefined, alice.token);
+    assert.equal(detail.quotes.length, 2);
+    assert.equal(detail.quotes[0].total_paisa, 1350000);
+    assert.ok(detail.quotes[0].accepted_at);
+    assert.deepEqual(detail.events.map(e => e.event), ['requested', 'quoted', 'quoted', 'quote_accepted', 'confirmed', 'cancellation_requested', 'cancelled']);
+    await call('POST', `/api/user/trip-requests/${trip.id}/cancel`, { version: trip.version, reason: 'Again' }, alice.token, 409);
+    assert.equal((await call('GET', '/api/ready')).ok, true);
+  });
+  await t.test('trip daily quotas persist and unconfirmed requests can cancel immediately', async () => {
+    const body = tripBody();
+    let first;
+    for (let i = 0; i < 10; i++) {
+      const result = await call('POST', '/api/trip-requests', body, bob.token, 201, { 'Idempotency-Key': crypto.randomUUID() });
+      first ??= result.trip;
+    }
+    await call('POST', '/api/trip-requests', body, bob.token, 429, { 'Idempotency-Key': crypto.randomUUID() });
+    await call('POST', `/api/user/trip-requests/${first.id}/cancel`, { version: first.version, reason: 'Do not proceed' }, alice.token, 404);
+    const result = await call('POST', `/api/user/trip-requests/${first.id}/cancel`, { version: first.version, reason: 'Do not proceed' }, bob.token);
+    assert.equal(result.trip.status, 'cancelled');
+    assert.equal((await call('GET', '/api/admin/trip-requests?status=cancelled', undefined, staff.token)).pagination.total, 2);
+    await call('GET', '/api/user/trip-requests?status=__proto__', undefined, bob.token, 400);
+  });
   await t.test('profile validation and password changes revoke other sessions', async () => {
     const second = await call('POST','/api/auth/login',{email:'alice@example.test',password});
     await call('PUT','/api/auth/profile',{name:'  '},alice.token,400);
@@ -213,10 +290,14 @@ test('FarReach API with real MySQL and independent server processes', { timeout:
   await t.test('production never falls back to development OTP previews', async () => {
     worker.kill(); await new Promise(resolve => worker.once('exit',resolve));
     env.NODE_ENV = 'production';
+    const productionPassword = crypto.randomBytes(24).toString('hex');
+    await admin.query("CREATE USER ?@'%' IDENTIFIED BY ?", [productionUser, productionPassword]);
+    await admin.query(`GRANT ALL PRIVILEGES ON \`${database}\`.* TO ?@'%'`, [productionUser]);
+    Object.assign(env, { DB_USER: productionUser, DB_PASSWORD: productionPassword, APP_API_BASE_URL: 'https://api.example.test', CORS_ORIGINS: 'https://app.example.test', SMTP_HOST: '127.0.0.1', SMTP_PORT: '9', SMTP_USER: 'test', SMTP_PASS: 'test', SMTP_FROM: 'FarReach <test@example.test>' });
     await start();
-    const signup = await call('POST','/api/auth/signup/start',{email:'production@example.test',name:'Production'},null,503);
+    const signup = await call('POST','/api/auth/signup/start',{email:'production@example.test',name:'Production'},null,502);
     assert.equal(signup.previewCode,undefined);
-    const reset = await call('POST','/api/auth/password-reset/start',{email:'staff@example.test'},null,503);
+    const reset = await call('POST','/api/auth/password-reset/start',{email:'staff@example.test'},null,502);
     assert.equal(reset.previewCode,undefined);
     const [[count]] = await admin.query('SELECT COUNT(*) AS count FROM otp_verifications WHERE email=?',['production@example.test']);
     assert.equal(count.count,0);

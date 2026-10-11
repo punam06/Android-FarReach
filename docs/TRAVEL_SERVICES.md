@@ -10,7 +10,7 @@ The repository was cloned from `punam06/Android-FarReach`, with a clean `main` a
 | Suggested stays | Hardcoded suggestions with fabricated availability | Validated dates, traveler/room estimates, price filtering, explicitly unknown availability, no fabricated fallback properties |
 | Booking | Create, list, cancel | Server quote, concurrent duplicate protection, reprice/reschedule, Dhaka cancellation policy, reservation references and receipts |
 | Budget pricing | Web calculations and duplicated mobile package rates | Shared server pricing, category/tier options, origin districts, per-component BDT estimates and correct zero-night day trips |
-| Chatbot | Absent | Account-scoped local travel assistant, database conversation history, catalog search, account booking counts, deliberate ticket creation action |
+| Chatbot | Absent | Account-scoped Gemini travel assistant when configured, Markdown topic policy, database conversation history, local fallback, deliberate ticket creation action |
 | Tickets | Absent | Support/custom trip requests, optional booking association, threaded replies, close/reopen, admin inbox and status management |
 | Profile | Mobile account summary and basic booking cancellation | Edit name/phone/address/password; saved spots, booking management and receipts, tickets, chat, account refresh |
 
@@ -109,6 +109,24 @@ Creation and rescheduling lock the user row before duplicate checks, so concurre
 
 These are FarReach package reservations. No payment, hotel inventory hold, airline/rail issuance or attraction admission is performed. The receipt explicitly states this limitation.
 
+## Trip requests and quotes
+
+| Method | Route | Behavior |
+| --- | --- | --- |
+| GET | `/api/travel/providers` | Available provider preferences; all report `live_booking: false` |
+| POST | `/api/trip-requests` | Submit a request with an `Idempotency-Key` header |
+| GET | `/api/user/trip-requests` | Own paginated requests; accepts `page`, `limit`, and `status` |
+| GET | `/api/user/trip-requests/:id` | Own request, quotes, and status history |
+| POST | `/api/user/trip-requests/:id/accept` | Accept the current quote and its terms with `{version,quote_id,accept_terms:true}` |
+| POST | `/api/user/trip-requests/:id/cancel` | Cancel an unconfirmed request or request cancellation of a confirmed trip |
+| GET | `/api/admin/trip-requests` | Admin paginated request inbox |
+| GET | `/api/admin/trip-requests/:id` | Admin request detail |
+| POST | `/api/admin/trip-requests/:id/quotes` | Publish an itemized quote with an itinerary, cancellation policy, and expiry |
+| POST | `/api/admin/trip-requests/:id/confirm` | Record supplier confirmation after customer acceptance |
+| POST | `/api/admin/trip-requests/:id/close` | Reject a request or record a supplier cancellation |
+
+Request creation needs service, provider preference, origin, destination, dates, traveler counts, contact details, and an optional BDT-paisa budget and requirements. A per-account limit of ten new requests per day applies. Every state-changing request after creation includes the current `version`; a stale version returns 409 so the traveler can review the latest quote or status before acting. Quotes contain integer BDT-paisa line items and expire no later than the trip start. The status path is `requested → quoted → awaiting_confirmation → confirmed`; cancellation and rejection have separate transitions. Trip.com and GoZayaan are preferences or external links, not connected inventory or booking APIs. FarReach does not collect payment or claim a supplier booking until an operator records confirmation details.
+
 ## Support tickets and chatbot
 
 | Method | User route | Behavior |
@@ -126,7 +144,7 @@ Ticket categories: `general`, `booking`, `custom_trip`, `account`, `payment`. A 
 
 Admin endpoints use `/api/admin/tickets` with the same list/detail/messages/status paths, and allow statuses open, in_progress, resolved and closed. They require the existing admin role. No public role promotion was added. The Flutter profile shows a Support inbox for admins.
 
-The chatbot is a local rules/catalog assistant, with no external LLM dependency. It uses destination search and the authenticated account's booking count, persists conversation pairs, and answers FarReach travel/support questions. A `create_ticket` action opens a form; chat never creates tickets or changes bookings automatically.
+With `GEMINI_API_KEY` set on the server, the chatbot uses Gemini 3.5 Flash-Lite. Its allowed topics and app facts are defined in [`server/CHATBOT_SCOPE.md`](../server/CHATBOT_SCOPE.md), which the server loads as instructions. Gemini classifies each question; out-of-scope questions receive a fixed reminder instead of the generated answer. The server sends only recent conversation turns, matching public catalog names, and an active reservation count when relevant. Chat is still account-scoped and rate-limited. Without the key, the existing local rules/catalog assistant remains available. A `create_ticket` action opens a form; chat never creates tickets or changes bookings automatically. Set the key in ignored `server/.env` for local Node or Docker Compose; production should inject it as a server environment variable. Do not put it in Flutter build arguments or commit it.
 
 ## Verification
 
@@ -140,7 +158,7 @@ npm audit --omit=dev
 
 Tests create and drop only a randomly named `farreach_test_<hex>` database. They require a MySQL account able to create/drop databases. Defaults match this local compose database: root, port 3308, password `farreach-root-local-only`. Override `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_USER`, and `TEST_DB_PASSWORD` when needed. Tests never use the application database for their fixtures.
 
-Coverage includes OTP proof, restart persistence, logout, pricing validation/day trips, honest stay estimates, concurrent booking creation, repricing and cancellation, receipt validity, account isolation, ticket/admin workflows, chatbot persistence, profile password/session handling, reset-code consumption, and malformed JSON handling.
+Coverage includes OTP proof, restart persistence, logout, pricing validation/day trips, honest stay estimates, concurrent booking creation, repricing and cancellation, receipt validity, account isolation, ticket/admin workflows, chatbot persistence and scope handling, trip request idempotency, quote expiry and state transitions, profile password/session handling, reset-code consumption, and malformed JSON handling.
 
 From `mobile`: `flutter analyze`, `flutter test`, `flutter build apk --debug`. Additional UI tests run the new flows at 412px and 320px phone widths, including reviewing a server quote before booking changes. SMTP delivery, live supplier reservations and release signing require external configuration.
 

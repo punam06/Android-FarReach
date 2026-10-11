@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const express = require('express');
 const p = require('./pricing');
+const { generateTravelReply } = require('./gemini-chat');
 
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 const reference = prefix => `${prefix}-${crypto.randomUUID().toUpperCase()}`;
@@ -173,7 +174,7 @@ function mountTravelApi(app, { db, requireAuth, requireAdmin, currentUserFromReq
   router.get('/chatbot/messages', requireAuth, wrap(async (req, res) => {
     const account = await user(req);
     const [rows] = await db.query('SELECT id,role,message,created_at FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT 100', [account.id]);
-    res.json({ messages: rows.reverse(), mode: 'local-travel-assistant' });
+    res.json({ messages: rows.reverse(), mode: process.env.GEMINI_API_KEY ? 'gemini-travel-assistant' : 'local-travel-assistant' });
   }));
   router.delete('/chatbot/messages', requireAuth, wrap(async (req, res) => {
     await db.query('DELETE FROM chat_messages WHERE user_id=?', [(await user(req)).id]);
@@ -182,6 +183,8 @@ function mountTravelApi(app, { db, requireAuth, requireAdmin, currentUserFromReq
   router.post('/chatbot/messages', requireAuth, wrap(async (req, res) => {
     const account = await user(req);
     const message = p.text(req.body?.message, 'message', 1000);
+    const [[recent]] = await db.query("SELECT COUNT(*) AS count FROM chat_messages WHERE user_id=? AND role='user' AND created_at>DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 MINUTE)", [account.id]);
+    if (recent.count >= 20) throw new p.ApiError(429, 'Please wait a minute before sending more messages');
     const lower = message.toLowerCase();
     let reply; let action = null;
     if (/ticket|support|help|custom|refund|payment/.test(lower)) {
@@ -206,13 +209,38 @@ function mountTravelApi(app, { db, requireAuth, requireAdmin, currentUserFromReq
       const [spots] = await db.query('SELECT s.name,d.name AS district FROM spots s LEFT JOIN districts d ON d.id=s.district_id WHERE s.name LIKE ? OR d.name LIKE ? ORDER BY s.name LIMIT 5', [`%${query}%`, `%${query}%`]);
       reply = spots.length ? `Destinations matching your search: ${spots.map(s => `${s.name} (${s.district})`).join('; ')}. Open Explore for details, stays, and pricing.` : 'I can help with destination names, stays, budgets, bookings, account access, and custom trip tickets. Ask about one of these or enter a district or destination name.';
     }
+    let mode = 'local-travel-assistant';
+    if (process.env.GEMINI_API_KEY) {
+      const [historyRows] = await db.query('SELECT role,message FROM chat_messages WHERE user_id=? ORDER BY id DESC LIMIT 10', [account.id]);
+      const words = [...new Set(message.toLowerCase().match(/[a-z]{3,}/g) || [])].slice(0, 5);
+      let catalog = [];
+      if (words.length) {
+        const conditions = words.map(() => '(LOWER(s.name) LIKE ? OR LOWER(d.name) LIKE ?)').join(' OR ');
+        const values = words.flatMap(word => [`%${word}%`, `%${word}%`]);
+        const [rows] = await db.query(`SELECT s.name,d.name AS district FROM spots s LEFT JOIN districts d ON d.id=s.district_id WHERE ${conditions} ORDER BY s.name LIMIT 8`, values);
+        catalog = rows.map(item => `${item.name} (${item.district})`);
+      }
+      const context = [
+        catalog.length ? `Matching catalog destinations: ${catalog.join('; ')}` : 'No matching catalog destinations were found.',
+        /my.*book|receipt|reservation/.test(lower) ? `This account's active reservation count is available in the local answer: ${reply}` : '',
+      ].filter(Boolean).join('\n');
+      try {
+        const generated = await generateTravelReply({ message, history: historyRows.reverse(), context });
+        reply = generated.reply;
+        if (!generated.inScope) action = null;
+        mode = 'gemini-travel-assistant';
+      } catch (err) {
+        console.error('[chatbot] Gemini unavailable:', err.message);
+        throw new p.ApiError(503, 'Travel assistant is temporarily unavailable. Please try again.');
+      }
+    }
     await transaction(db, async conn => {
       await conn.query('SELECT id FROM users WHERE id=? FOR UPDATE', [account.id]);
       const [[recent]] = await conn.query("SELECT COUNT(*) AS count FROM chat_messages WHERE user_id=? AND role='user' AND created_at>DATE_SUB(UTC_TIMESTAMP(),INTERVAL 1 MINUTE)", [account.id]);
       if (recent.count >= 20) throw new p.ApiError(429, 'Please wait a minute before sending more messages');
       await conn.query("INSERT INTO chat_messages (user_id,role,message) VALUES (?,'user',?),(?,'assistant',?)", [account.id, message, account.id, reply]);
     });
-    res.json({ reply, action, mode: 'local-travel-assistant' });
+    res.json({ reply, action, mode });
   }));
   router.use((err, req, res, next) => {
     if (!err.status) console.error('[travel-api]', err.message);

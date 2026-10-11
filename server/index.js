@@ -6,7 +6,6 @@ const dotenv = require('dotenv');
 const express = require('express');
 const nodemailer = require('nodemailer');
 const multer = require('multer');
-const db = require('./db');
 
 const projectRoot = path.join(__dirname, '..');
 const envPaths = [path.join(__dirname, '.env'), path.join(projectRoot, '.env')];
@@ -15,10 +14,16 @@ for (const envPath of envPaths) {
     dotenv.config({ path: envPath, override: false });
   }
 }
+const db = require('./db');
+const { runtimeConfig, securityMiddleware } = require('./runtime-config');
+const runtime = runtimeConfig();
 
 
 
 const app = express();
+app.disable('x-powered-by');
+app.set('trust proxy', runtime.proxyHops);
+let shuttingDown = false;
 const PORT = process.env.PORT || 3000;
 
 const clientRoot = path.join(projectRoot, 'public');
@@ -37,17 +42,8 @@ const clientFiles = new Set([
 ]);
 const allowedImageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
+app.use(securityMiddleware(runtime));
 app.use(express.json({ limit: '1mb' }));
-app.use((req, res, next) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-Token');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-  next();
-});
 
 function sendClientFile(fileName) {
   if (!clientFiles.has(fileName)) throw new Error(`Client file is not allowlisted: ${fileName}`);
@@ -148,6 +144,11 @@ app.get('/user-dashboard', sendClientFile('user-dashboard.html'));
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
+});
+app.get('/api/ready', async (req, res) => {
+  if (shuttingDown) return res.status(503).json({ ok: false });
+  try { await db.query('SELECT 1'); res.json({ ok: true }); }
+  catch (_) { res.status(503).json({ ok: false }); }
 });
 
 const MAX_BOOKING_PERSONS = 20;
@@ -876,6 +877,7 @@ function publicUser(user) {
 
 
 mountTravelApi(app, { db, requireAuth, requireAdmin, currentUserFromRequest });
+require('./trip-api').mountTripApi(app, { db, requireAuth, requireAdmin, currentUserFromRequest });
 mountAccountApi(app, { db, requireAuth, currentUserFromRequest, publicUser, upload, isValidPassword, hashPassword, verifyPassword, getAuthToken, sendVerificationMail, reserveOtpRequest, sendRateLimitResponse, isDevelopmentMode });
 
 app.get('/api/auth/me', requireAuth, async (req, res) => {
@@ -1698,7 +1700,22 @@ async function startServer() {
 }
 
 if (require.main === module) {
-  startServer();
+  startServer().then(server => {
+    if (!server) return;
+    const shutdown = () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      const deadline = setTimeout(() => process.exit(1), 10000);
+      deadline.unref();
+      server.close(async () => {
+        try { await db.end(); clearTimeout(deadline); process.exitCode = 0; }
+        catch (_) { process.exitCode = 1; }
+      });
+      server.closeIdleConnections();
+    };
+    process.once('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
+  });
 }
 
 module.exports = { app, startServer };

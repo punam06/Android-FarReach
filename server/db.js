@@ -10,7 +10,12 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME || 'torisom_db',
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0,
+  queueLimit: 100,
+  connectTimeout: 10000,
+  ssl: process.env.DB_SSL === 'true' ? {
+    rejectUnauthorized: true,
+    ...(process.env.DB_SSL_CA_FILE ? { ca: require('fs').readFileSync(process.env.DB_SSL_CA_FILE, 'utf8') } : {}),
+  } : undefined,
   timezone: 'Z',
   dateStrings: ['DATE']
 });

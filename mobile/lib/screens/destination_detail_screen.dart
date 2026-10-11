@@ -6,6 +6,7 @@ import '../services/api_client.dart';
 import '../state/app_controller.dart';
 import '../widgets/destination_image.dart';
 import 'travel_tools_screen.dart';
+import 'trip_requests_screen.dart';
 
 class DestinationDetailScreen extends StatefulWidget {
   const DestinationDetailScreen({
@@ -224,6 +225,32 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
                         ),
                       ),
                       const SizedBox(height: 22),
+                      FilledButton.icon(
+                        onPressed: () {
+                          if (!widget.controller.isAuthenticated) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Sign in from Profile to request a trip.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => RequestTripScreen(
+                                controller: widget.controller,
+                                destination: widget.destination.name,
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.travel_explore),
+                        label: const Text('Request a complete trip'),
+                      ),
+                      const SizedBox(height: 12),
                       OutlinedButton.icon(
                         onPressed: widget.destination.id <= 0
                             ? null

@@ -462,6 +462,7 @@ class _ChatScreenState extends State<ChatScreen> {
   List<dynamic> _messages = [];
   bool _busy = true;
   String? _error;
+  String? _mode;
   bool _ticketAction = false;
   @override
   void initState() {
@@ -485,7 +486,12 @@ class _ChatScreenState extends State<ChatScreen> {
       final data = await widget.controller.api.requestJson(
         '/api/chatbot/messages',
       );
-      if (mounted) setState(() => _messages = data['messages'] as List);
+      if (mounted) {
+        setState(() {
+          _messages = data['messages'] as List;
+          _mode = data['mode']?.toString();
+        });
+      }
       _scrollToEnd();
     } on ApiFailure catch (e) {
       if (mounted) setState(() => _error = e.message);
@@ -523,6 +529,7 @@ class _ChatScreenState extends State<ChatScreen> {
             {'role': 'assistant', 'message': data['reply']},
           ]);
           _ticketAction = data['action'] == 'create_ticket';
+          _mode = data['mode']?.toString() ?? _mode;
           _input.clear();
         });
       }
@@ -583,10 +590,12 @@ class _ChatScreenState extends State<ChatScreen> {
     ),
     body: Column(
       children: [
-        const Padding(
-          padding: EdgeInsets.all(12),
+        Padding(
+          padding: const EdgeInsets.all(12),
           child: Text(
-            'A local assistant for FarReach destinations, budgets, bookings and support.',
+            _mode == 'gemini-travel-assistant'
+                ? 'Ask about Bangladesh travel and FarReach. Gemini processes your question and recent chat to answer.'
+                : 'Ask about Bangladesh travel, FarReach destinations, budgets, bookings and support.',
           ),
         ),
         Expanded(
@@ -609,7 +618,16 @@ class _ChatScreenState extends State<ChatScreen> {
                         : null,
                     child: Padding(
                       padding: const EdgeInsets.all(14),
-                      child: Text('${m['message']}'),
+                      child: Text(
+                        '${m['message']}',
+                        style: m['role'] == 'user'
+                            ? TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onPrimaryContainer,
+                              )
+                            : null,
+                      ),
                     ),
                   ),
                 ),

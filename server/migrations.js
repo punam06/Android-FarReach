@@ -37,6 +37,7 @@ async function migrate(db) {
     message TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, INDEX(user_id, id),
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  await require('./trip-migrations')(db);
   await db.query('DELETE FROM auth_sessions WHERE expires_at <= UTC_TIMESTAMP(3)');
   await db.query("UPDATE bookings SET reference=CONCAT('FR-',UPPER(UUID())) WHERE reference IS NULL");
 }

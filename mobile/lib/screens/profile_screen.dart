@@ -9,6 +9,7 @@ import 'account_forms_screen.dart';
 import 'booking_management_screen.dart';
 import 'saved_screen.dart';
 import 'support_screen.dart';
+import 'trip_requests_screen.dart';
 
 enum _AuthMode { signIn, register }
 
@@ -566,6 +567,31 @@ class _SignedInProfile extends StatelessWidget {
                           ),
                         ),
                       ),
+                      ListTile(
+                        leading: const Icon(Icons.travel_explore),
+                        title: const Text('Trip requests & quotes'),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                TripRequestsScreen(controller: controller),
+                          ),
+                        ),
+                      ),
+                      if (user.role == 'admin')
+                        ListTile(
+                          leading: const Icon(Icons.business_center_outlined),
+                          title: const Text('Trip operations'),
+                          onTap: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => TripRequestsScreen(
+                                controller: controller,
+                                admin: true,
+                              ),
+                            ),
+                          ),
+                        ),
                       ListTile(
                         leading: const Icon(Icons.confirmation_number_outlined),
                         title: const Text('Tickets & custom trip requests'),

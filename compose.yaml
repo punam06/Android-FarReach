@@ -19,6 +19,9 @@ services:
       retries: 40
   api:
     build: .
+    env_file:
+      - path: ./server/.env
+        required: false
     environment:
       NODE_ENV: development
       DB_HOST: db
