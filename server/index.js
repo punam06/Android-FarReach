@@ -117,6 +117,13 @@ const upload = multer({
   },
 });
 
+function sendClientFile(filename) {
+  return (req, res) => {
+    const clientRoot = path.join(projectRoot, 'build', 'web');
+    res.sendFile(path.join(clientRoot, filename));
+  };
+}
+
 
 app.get(['/', '/login', '/public', '/public/'], sendClientFile('index.html'));
 app.get('/admin-dashboard', sendClientFile('admin-dashboard.html'));
