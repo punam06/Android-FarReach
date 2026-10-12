@@ -78,6 +78,9 @@ class AppTheme {
           horizontal: 18,
           vertical: 16,
         ),
+        labelStyle: TextStyle(color: scheme.onSurfaceVariant),
+        floatingLabelStyle: TextStyle(color: scheme.primary),
+        hintStyle: TextStyle(color: scheme.onSurfaceVariant),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(18),
           borderSide: BorderSide.none,

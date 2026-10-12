@@ -20,9 +20,12 @@ class _AppShellState extends State<AppShell> {
   int _index = 0;
 
   late final _pages = <Widget>[
-    ExploreScreen(controller: widget.controller),
-    MapScreen(controller: widget.controller),
-    SavedScreen(controller: widget.controller),
+    ExploreScreen(
+      controller: widget.controller,
+      onGoToProfile: _goToProfile,
+    ),
+    MapScreen(controller: widget.controller, onGoToProfile: _goToProfile),
+    SavedScreen(controller: widget.controller, onGoToProfile: _goToProfile),
     ProfileScreen(controller: widget.controller),
   ];
 
@@ -121,12 +124,17 @@ class _AppShellState extends State<AppShell> {
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) => SupportChatSheet(
+        controller: widget.controller,
         onNavigate: (index) {
           setState(() => _index = index);
           Navigator.pop(context);
         },
       ),
     );
+  }
+
+  void _goToProfile() {
+    if (mounted) setState(() => _index = 3);
   }
 }
 

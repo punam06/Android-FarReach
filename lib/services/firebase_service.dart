@@ -8,9 +8,7 @@ import '../firebase_options.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   if (kDebugMode) {
     print('FCM background message received: ${message.messageId}');
   }
@@ -39,7 +37,9 @@ class FirebaseService {
       );
 
       // Register background handler for FCM
-      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+      FirebaseMessaging.onBackgroundMessage(
+        _firebaseMessagingBackgroundHandler,
+      );
 
       // Request FCM permissions (Android 13+ & Web / iOS)
       final settings = await FirebaseMessaging.instance.requestPermission(
@@ -68,7 +68,9 @@ class FirebaseService {
       // Listen for foreground messages
       FirebaseMessaging.onMessage.listen((RemoteMessage message) {
         if (kDebugMode) {
-          print('FCM Foreground message: ${message.notification?.title} - ${message.notification?.body}');
+          print(
+            'FCM Foreground message: ${message.notification?.title} - ${message.notification?.body}',
+          );
         }
       });
 
@@ -97,6 +99,7 @@ class FirebaseService {
       await credential.user?.updateDisplayName(displayName.trim());
       await credential.user?.reload();
     }
+    await credential.user?.sendEmailVerification();
     return credential;
   }
 
@@ -119,6 +122,18 @@ class FirebaseService {
   /// Send password reset email
   Future<void> sendPasswordResetEmail(String email) async {
     await auth.sendPasswordResetEmail(email: email.trim());
+  }
+
+  /// Send another verification email to the current Firebase user.
+  Future<void> sendEmailVerification() async {
+    final user = currentUser;
+    if (user == null) {
+      throw FirebaseAuthException(
+        code: 'user-not-found',
+        message: 'No signed-in user is available.',
+      );
+    }
+    await user.sendEmailVerification();
   }
 
   /// Retrieve current user ID token
@@ -162,6 +177,8 @@ class FirebaseService {
           return 'This user account has been disabled.';
         case 'operation-not-allowed':
           return 'Email/Password sign-in is not enabled in Firebase Console.';
+        case 'requires-recent-login':
+          return 'Please sign in again before completing this action.';
         default:
           return error.message ?? 'Authentication failed. Please try again.';
       }

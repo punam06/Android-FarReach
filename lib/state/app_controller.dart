@@ -22,6 +22,8 @@ class AppController extends ChangeNotifier {
   static const _legacySavedNamesKey = 'farreach_saved_names_v1';
   static const _guestSavedNamesKey = 'farreach_saved_names_guest_v2';
   static const _lastUpdatedKey = 'farreach_destinations_updated_at';
+  static const _recentlyViewedKey = 'farreach_recently_viewed_v2';
+  static const _recentlyViewedLimit = 12;
 
   final ApiClient api;
   final SharedPreferences _preferences;
@@ -30,6 +32,7 @@ class AppController extends ChangeNotifier {
   List<Destination> _destinations = fallbackDestinations;
   final Set<String> _savedNames = {};
   List<Booking> _bookings = const [];
+  List<Destination> _recentlyViewed = const [];
   AppUser? _user;
   DateTime? _lastUpdated;
   String? _lastError;
@@ -48,11 +51,33 @@ class AppController extends ChangeNotifier {
   bool get authBusy => _authBusy;
   bool get offline => _offline;
   bool get initialized => _initialized;
-  bool get isAuthenticated => _user != null && api.token?.isNotEmpty == true;
+  bool get isAuthenticated =>
+      _user != null &&
+      (api.token?.isNotEmpty == true ||
+          (FirebaseService.isInitialized &&
+              FirebaseService.instance.currentUser != null));
 
   List<Destination> get savedDestinations => _destinations
       .where((destination) => isSaved(destination))
       .toList(growable: false);
+
+  /// Recently opened destinations, resolved against the live catalog when
+  /// possible so refreshed data (images, coordinates) stays current.
+  List<Destination> get recentlyViewed {
+    if (_recentlyViewed.isEmpty) return const [];
+    final byKey = {for (final item in _destinations) item.cacheKey: item};
+    final byName = {
+      for (final item in _destinations) _normalizeName(item.name): item,
+    };
+    return _recentlyViewed
+        .map(
+          (item) =>
+              byKey[item.cacheKey] ??
+              byName[_normalizeName(item.name)] ??
+              item,
+        )
+        .toList(growable: false);
+  }
 
   static Future<AppController> create({ApiClient? api}) async {
     final preferences = await SharedPreferences.getInstance();
@@ -89,6 +114,50 @@ class AppController extends ChangeNotifier {
     }
     final updated = _preferences.getString(_lastUpdatedKey);
     _lastUpdated = updated == null ? null : DateTime.tryParse(updated);
+    final recent = _preferences.getString(_recentlyViewedKey);
+    if (recent != null) {
+      try {
+        _recentlyViewed = Destination.decodeList(recent);
+      } catch (_) {
+        // Ignore corrupt recent-history data.
+      }
+    }
+  }
+
+  /// Records that the traveler opened [destination] so it can appear in the
+  /// "Recently viewed" row. Most-recent first, de-duplicated, capped.
+  void recordDestinationView(Destination destination) {
+    if (destination.name.trim().isEmpty) return;
+    final key = destination.cacheKey;
+    if (_recentlyViewed.isNotEmpty && _recentlyViewed.first.cacheKey == key) {
+      return;
+    }
+    final next = <Destination>[
+      destination,
+      ..._recentlyViewed.where((item) => item.cacheKey != key),
+    ];
+    _recentlyViewed = next.length > _recentlyViewedLimit
+        ? next.sublist(0, _recentlyViewedLimit)
+        : next;
+    unawaited(_persistRecentlyViewed());
+    notifyListeners();
+  }
+
+  Future<void> _persistRecentlyViewed() {
+    if (_recentlyViewed.isEmpty) {
+      return _preferences.remove(_recentlyViewedKey);
+    }
+    return _preferences.setString(
+      _recentlyViewedKey,
+      Destination.encodeList(_recentlyViewed),
+    );
+  }
+
+  Future<void> clearRecentlyViewed() async {
+    if (_recentlyViewed.isEmpty) return;
+    _recentlyViewed = const [];
+    await _preferences.remove(_recentlyViewedKey);
+    notifyListeners();
   }
 
   Future<void> initialize() async {
@@ -97,16 +166,19 @@ class AppController extends ChangeNotifier {
     _loading = true;
     notifyListeners();
 
-    if (FirebaseService.isInitialized && FirebaseService.instance.currentUser != null) {
+    if (FirebaseService.isInitialized &&
+        FirebaseService.instance.currentUser != null) {
       final fbUser = FirebaseService.instance.currentUser!;
-      final token = await FirebaseService.instance.getIdToken();
-      final appUser = _appUserFromFirebase(fbUser);
-      api.token = token;
-      _user = appUser;
-      await _activateUserSavedScope(appUser);
       try {
-        await Future.wait([_loadBookings(), _syncSavedWithServer()]);
-      } catch (_) {}
+        await _exchangeFirebaseUser(fbUser);
+      } catch (_) {
+        // The API may be unreachable at launch. Keep the Firebase identity so
+        // the user stays signed in and retry the exchange on the next action.
+        final appUser = _appUserFromFirebase(fbUser);
+        api.token = await FirebaseService.instance.getIdToken();
+        _user = appUser;
+        await _activateUserSavedScope(appUser);
+      }
     } else {
       String? token;
       try {
@@ -137,7 +209,8 @@ class AppController extends ChangeNotifier {
 
   static AppUser _appUserFromFirebase(User user) {
     final email = user.email ?? '';
-    final name = (user.displayName != null && user.displayName!.trim().isNotEmpty)
+    final name =
+        (user.displayName != null && user.displayName!.trim().isNotEmpty)
         ? user.displayName!.trim()
         : (email.contains('@') ? email.split('@').first : 'Traveler');
     return AppUser(
@@ -321,9 +394,7 @@ class AppController extends ChangeNotifier {
         );
         final fbUser = cred.user;
         if (fbUser == null) throw Exception('No user returned from Firebase');
-        final appUser = _appUserFromFirebase(fbUser);
-        final token = await fbUser.getIdToken();
-        await _acceptFirebaseUser(appUser, token);
+        await _signInFirebase(fbUser);
       } else {
         final result = await api.login(email, password);
         await _acceptAuth(result);
@@ -358,9 +429,7 @@ class AppController extends ChangeNotifier {
         );
         final fbUser = cred.user;
         if (fbUser == null) throw Exception('No user returned from Firebase');
-        final appUser = _appUserFromFirebase(fbUser);
-        final token = await fbUser.getIdToken();
-        await _acceptFirebaseUser(appUser, token);
+        await _signInFirebase(fbUser);
       } else {
         final result = await api.finishSignup(
           name: name,
@@ -403,17 +472,52 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> _acceptFirebaseUser(AppUser appUser, String? token) async {
-    _user = appUser;
-    api.token = token;
-    if (token != null) {
-      await _tokenStore.write(token);
+  Future<void> resendFirebaseVerificationEmail() async {
+    if (!FirebaseService.isInitialized) {
+      throw const ApiFailure('Firebase authentication is not available.');
     }
-    await _activateUserSavedScope(appUser);
-    try {
-      await Future.wait([_loadBookings(), _syncSavedWithServer()]);
-    } catch (_) {}
+    _authBusy = true;
+    _lastError = null;
     notifyListeners();
+    try {
+      await FirebaseService.instance.sendEmailVerification();
+    } catch (e) {
+      _lastError = FirebaseService.getErrorMessage(e);
+      rethrow;
+    } finally {
+      _authBusy = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _exchangeFirebaseUser(User fbUser) async {
+    final idToken = await fbUser.getIdToken();
+    if (idToken == null || idToken.isEmpty) {
+      throw const ApiFailure('Your sign-in session could not be created.');
+    }
+    final result = await api.exchangeFirebaseToken(idToken);
+    await _acceptAuth(result);
+  }
+
+  Future<void> _signInFirebase(User fbUser) async {
+    try {
+      await _exchangeFirebaseUser(fbUser);
+    } on ApiFailure catch (error) {
+      // A rejected token is a real failure, but an unreachable API should not
+      // sign the user out. Keep the Firebase identity and retry later.
+      if (error.isUnauthorized) rethrow;
+      final appUser = _appUserFromFirebase(fbUser);
+      api.token = await FirebaseService.instance.getIdToken();
+      _user = appUser;
+      await _activateUserSavedScope(appUser);
+      notifyListeners();
+    } catch (_) {
+      final appUser = _appUserFromFirebase(fbUser);
+      api.token = await FirebaseService.instance.getIdToken();
+      _user = appUser;
+      await _activateUserSavedScope(appUser);
+      notifyListeners();
+    }
   }
 
   Future<SignupStartResult> startSignup(String name, String email) async {
@@ -545,6 +649,45 @@ class AppController extends ChangeNotifier {
 
   Future<WeatherForecast> forecastFor(Destination destination, DateTime date) =>
       api.getWeatherForecast(destination, date);
+
+  Future<String> chatReply(
+    String message, {
+    List<Map<String, String>> history = const [],
+  }) => api.sendChatMessage(message: message, history: history);
+
+  /// Asks the AI trip planner for a day-by-day itinerary using the live
+  /// destination catalog as its shortlist.
+  Future<String> planTrip({
+    required int days,
+    required int travelers,
+    required String budget,
+    required String origin,
+    required List<String> interests,
+    String notes = '',
+  }) {
+    final catalog = _destinations
+        .take(80)
+        .map(
+          (destination) => {
+            'name': destination.name,
+            'district': destination.district.isEmpty
+                ? destination.division
+                : destination.district,
+            'category': destination.category,
+            'budget': destination.budget,
+          },
+        )
+        .toList(growable: false);
+    return api.planTrip(
+      days: days,
+      travelers: travelers,
+      budget: budget,
+      origin: origin,
+      interests: interests,
+      notes: notes,
+      catalog: catalog,
+    );
+  }
 
   Future<List<HotelRecommendation>> hotelsFor(Destination destination) =>
       api.getHotels(destination);

@@ -4,12 +4,18 @@ import '../models/destination.dart';
 import '../state/app_controller.dart';
 import '../widgets/destination_card.dart';
 import '../widgets/destination_image.dart';
+import '../widgets/trip_planner_sheet.dart';
 import 'destination_detail_screen.dart';
 
 class ExploreScreen extends StatefulWidget {
-  const ExploreScreen({super.key, required this.controller});
+  const ExploreScreen({
+    super.key,
+    required this.controller,
+    required this.onGoToProfile,
+  });
 
   final AppController controller;
+  final VoidCallback onGoToProfile;
 
   @override
   State<ExploreScreen> createState() => _ExploreScreenState();
@@ -31,6 +37,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
     animation: widget.controller,
     builder: (context, _) {
       final all = widget.controller.destinations;
+      final recent = widget.controller.recentlyViewed;
       final categories =
           <String>{
               'All',
@@ -64,6 +71,15 @@ class _ExploreScreenState extends State<ExploreScreen> {
               scrolledUnderElevation: 0,
               title: const Text('FarReach'),
               actions: [
+                IconButton(
+                  tooltip: 'AI trip planner',
+                  onPressed: () => TripPlannerSheet.show(
+                    context,
+                    controller: widget.controller,
+                    onOpenDestination: _open,
+                  ),
+                  icon: const Icon(Icons.auto_awesome),
+                ),
                 IconButton(
                   tooltip: 'Refresh destinations',
                   onPressed: widget.controller.loading
@@ -199,6 +215,49 @@ class _ExploreScreenState extends State<ExploreScreen> {
                 ),
               ),
             ),
+            if (recent.isNotEmpty)
+              SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 12, 2),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Recently viewed',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: widget.controller.clearRecentlyViewed,
+                            child: const Text('Clear'),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(
+                      height: 168,
+                      child: ListView.separated(
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
+                        scrollDirection: Axis.horizontal,
+                        itemCount: recent.length,
+                        separatorBuilder: (_, _) => const SizedBox(width: 12),
+                        itemBuilder: (context, index) {
+                          final destination = recent[index];
+                          return _RecentCard(
+                            destination: destination,
+                            baseUrl: widget.controller.api.baseUrl,
+                            onTap: () => _open(destination),
+                          );
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                  ],
+                ),
+              ),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(20, 10, 20, 14),
               sliver: SliverToBoxAdapter(
@@ -227,8 +286,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   ],
                 ),
               ),
-            ),
-            if (filtered.isEmpty)
+            ),            if (filtered.isEmpty)
               SliverFillRemaining(
                 hasScrollBody: false,
                 child: _EmptySearch(onClear: _clearFilters),
@@ -276,6 +334,7 @@ class _ExploreScreenState extends State<ExploreScreen> {
         builder: (_) => DestinationDetailScreen(
           controller: widget.controller,
           destination: destination,
+          onGoToProfile: widget.onGoToProfile,
         ),
       ),
     );
@@ -297,6 +356,78 @@ class _ExploreScreenState extends State<ExploreScreen> {
         action: SnackBarAction(
           label: 'Undo',
           onPressed: () => widget.controller.toggleSaved(destination),
+        ),
+      ),
+    );
+  }
+}
+
+class _RecentCard extends StatelessWidget {
+  const _RecentCard({
+    required this.destination,
+    required this.baseUrl,
+    required this.onTap,
+  });
+
+  final Destination destination;
+  final String baseUrl;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 170,
+      child: Card(
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: 96,
+                child: DestinationImage(
+                  destination: destination,
+                  baseUrl: baseUrl,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      destination.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.location_on_outlined,
+                          size: 14,
+                          color: scheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 3),
+                        Expanded(
+                          child: Text(
+                            destination.location,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: scheme.onSurfaceVariant),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

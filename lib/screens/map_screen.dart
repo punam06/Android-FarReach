@@ -7,9 +7,14 @@ import '../widgets/destination_image.dart';
 import 'destination_detail_screen.dart';
 
 class MapScreen extends StatelessWidget {
-  const MapScreen({super.key, required this.controller});
+  const MapScreen({
+    super.key,
+    required this.controller,
+    required this.onGoToProfile,
+  });
 
   final AppController controller;
+  final VoidCallback onGoToProfile;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -95,6 +100,7 @@ class MapScreen extends StatelessWidget {
                           builder: (_) => DestinationDetailScreen(
                             controller: controller,
                             destination: destination,
+                            onGoToProfile: onGoToProfile,
                           ),
                         ),
                       ),

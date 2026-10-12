@@ -5,16 +5,19 @@ import '../models/destination.dart';
 import '../services/api_client.dart';
 import '../state/app_controller.dart';
 import '../widgets/destination_image.dart';
+import '../widgets/safety_sheet.dart';
 
 class DestinationDetailScreen extends StatefulWidget {
   const DestinationDetailScreen({
     super.key,
     required this.controller,
     required this.destination,
+    required this.onGoToProfile,
   });
 
   final AppController controller;
   final Destination destination;
+  final VoidCallback onGoToProfile;
 
   @override
   State<DestinationDetailScreen> createState() =>
@@ -30,6 +33,11 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
   void initState() {
     super.initState();
     _weather = widget.controller.weatherFor(widget.destination);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        widget.controller.recordDestinationView(widget.destination);
+      }
+    });
   }
 
   @override
@@ -42,6 +50,12 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
             pinned: true,
             expandedHeight: 360,
             actions: [
+              IconButton.filledTonal(
+                tooltip: 'Safety & emergency',
+                onPressed: () => SafetySheet.show(context, widget.destination),
+                icon: const Icon(Icons.health_and_safety_outlined),
+              ),
+              const SizedBox(width: 8),
               IconButton.filledTonal(
                 tooltip: widget.controller.isSaved(widget.destination)
                     ? 'Remove from saved'
@@ -192,13 +206,62 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
                             OutlinedButton.icon(
                               onPressed: _pickWeatherDate,
                               icon: const Icon(Icons.calendar_month_outlined),
-                              label: Text('Check ${_shortDate(_weatherDate)} weather and safety'),
+                              label: Text(
+                                'Check ${_shortDate(_weatherDate)} weather and safety',
+                              ),
                             ),
                             if (_forecast != null) ...[
                               const SizedBox(height: 12),
                               _TripWeatherAdvice(future: _forecast!),
                             ],
                           ],
+                        ),
+                      ),
+                      const SizedBox(height: 26),
+                      _Section(
+                        title: 'Safety & emergency',
+                        child: Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Icon(
+                                      Icons.health_and_safety_outlined,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
+                                    ),
+                                    const SizedBox(width: 12),
+                                    const Expanded(
+                                      child: Text(
+                                        'Emergency hotlines plus nearby hospitals, police posts and other help for this place.',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 14),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: OutlinedButton.icon(
+                                    onPressed: () => SafetySheet.show(
+                                      context,
+                                      widget.destination,
+                                    ),
+                                    icon: const Icon(
+                                      Icons.open_in_new_outlined,
+                                    ),
+                                    label: const Text(
+                                      'Open safety & emergency tools',
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ),
                       const SizedBox(height: 26),
@@ -407,12 +470,20 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
   }
 
   Future<void> _showBudget() async {
-    await showModalBottomSheet<void>(
+    final result = await showModalBottomSheet<_BudgetResult>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
       builder: (context) =>
           _BudgetSheet(destination: widget.destination, weather: _weather),
+    );
+    if (result == null || !mounted) return;
+    final checkIn = result.checkIn;
+    await _showBooking(
+      initialDate: checkIn != null && checkIn.isAfter(DateTime.now())
+          ? checkIn
+          : null,
+      initialPersons: result.persons,
     );
   }
 
@@ -437,7 +508,10 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
     );
   }
 
-  Future<void> _showBooking() async {
+  Future<void> _showBooking({
+    DateTime? initialDate,
+    int? initialPersons,
+  }) async {
     if (widget.destination.id <= 0) {
       await showDialog<void>(
         context: context,
@@ -458,22 +532,31 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
       return;
     }
     if (!widget.controller.isAuthenticated) {
-      await showDialog<void>(
+      final goToSignIn = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           icon: const Icon(Icons.lock_outline),
           title: const Text('Sign in to book'),
           content: const Text(
-            'Open the Profile tab, sign in or create an account, then return to confirm your trip.',
+            'Sign in or create an account to confirm this trip. It only takes a moment, and your bookings and saved places sync to your account.',
           ),
           actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Got it'),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Not now'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.login),
+              label: const Text('Sign in'),
             ),
           ],
         ),
       );
+      if (goToSignIn == true && mounted) {
+        Navigator.of(context).pop();
+        widget.onGoToProfile();
+      }
       return;
     }
     final booking = await showModalBottomSheet<Booking>(
@@ -483,6 +566,8 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
       builder: (context) => _BookingSheet(
         controller: widget.controller,
         destination: widget.destination,
+        initialDate: initialDate,
+        initialPersons: initialPersons,
       ),
     );
     if (booking != null && mounted) {
@@ -657,7 +742,13 @@ class _TripWeatherAdvice extends StatelessWidget {
         return const Card(
           child: Padding(
             padding: EdgeInsets.all(16),
-            child: Row(children: [CircularProgressIndicator(), SizedBox(width: 14), Text('Checking this date...')]),
+            child: Row(
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(width: 14),
+                Text('Checking this date...'),
+              ],
+            ),
           ),
         );
       }
@@ -671,17 +762,45 @@ class _TripWeatherAdvice extends StatelessWidget {
         );
       }
       final forecast = snapshot.requireData;
-      final caution = forecast.precipitationProbability >= 60 || forecast.weatherCode >= 80;
-      final title = caution ? 'Use caution for this date' : 'Good to go for this date';
+      final caution =
+          forecast.precipitationProbability >= 60 || forecast.weatherCode >= 80;
+      final title = caution
+          ? 'Use caution for this date'
+          : 'Good to go for this date';
       final message = caution
           ? 'Rain or storm conditions may affect outdoor plans. Keep a flexible schedule and check again before leaving.'
           : 'The forecast looks suitable for sightseeing. Carry water and check local advisories before departure.';
+      final scheme = Theme.of(context).colorScheme;
+      final background = caution
+          ? scheme.errorContainer
+          : scheme.primaryContainer;
+      final foreground = caution
+          ? scheme.onErrorContainer
+          : scheme.onPrimaryContainer;
       return Card(
-        color: caution ? Theme.of(context).colorScheme.errorContainer : Theme.of(context).colorScheme.primaryContainer,
+        color: background,
         child: ListTile(
-          leading: Icon(caution ? Icons.warning_amber_rounded : Icons.check_circle_outline),
-          title: Text(title),
-          subtitle: Text('${_shortDate(forecast.date)} · ${forecast.minTemperature.round()}°-${forecast.maxTemperature.round()}°C · Rain ${forecast.precipitationProbability}%\n$message'),
+          leading: Icon(
+            caution ? Icons.warning_amber_rounded : Icons.check_circle_outline,
+            color: foreground,
+          ),
+          title: Text(
+            title,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: foreground),
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '${_shortDate(forecast.date)} · '
+              '${forecast.minTemperature.round()}°-${forecast.maxTemperature.round()}°C · '
+              'Rain ${forecast.precipitationProbability}%\n$message',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: foreground, height: 1.4),
+            ),
+          ),
         ),
       );
     },
@@ -861,6 +980,13 @@ class _GuidesSheet extends StatelessWidget {
   }
 }
 
+class _BudgetResult {
+  const _BudgetResult({required this.checkIn, required this.persons});
+
+  final DateTime? checkIn;
+  final int persons;
+}
+
 class _BudgetSheet extends StatefulWidget {
   const _BudgetSheet({required this.destination, required this.weather});
 
@@ -980,7 +1106,10 @@ class _BudgetSheetState extends State<_BudgetSheet> {
           height: MediaQuery.sizeOf(context).height * .86,
           child: ListView(
             children: [
-              Text('Trip budget', style: Theme.of(context).textTheme.headlineMedium),
+              Text(
+                'Trip budget',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
               const SizedBox(height: 4),
               Text('Build a complete estimate for ${widget.destination.name}.'),
               const SizedBox(height: 16),
@@ -994,7 +1123,18 @@ class _BudgetSheetState extends State<_BudgetSheet> {
               _BudgetDropdown(
                 label: 'Your district',
                 value: _origin,
-                items: const ['Dhaka', 'Chattogram', 'Rajshahi', 'Khulna', 'Sylhet', 'Rangamati', 'Cox\'s Bazar', 'Bandarban', 'Cumilla', 'Patuakhali'],
+                items: const [
+                  'Dhaka',
+                  'Chattogram',
+                  'Rajshahi',
+                  'Khulna',
+                  'Sylhet',
+                  'Rangamati',
+                  'Cox\'s Bazar',
+                  'Bandarban',
+                  'Cumilla',
+                  'Patuakhali',
+                ],
                 onChanged: (value) => setState(() => _origin = value),
               ),
               _BudgetDropdown(
@@ -1021,8 +1161,20 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                 labels: _guideLabels,
                 onChanged: (value) => setState(() => _guide = value),
               ),
-              _BudgetStepper(label: 'Number of people', value: _persons, min: 1, max: 20, onChanged: (value) => setState(() => _persons = value)),
-              _BudgetStepper(label: 'Trip duration (days)', value: _days, min: 1, max: 30, onChanged: (value) => setState(() => _days = value)),
+              _BudgetStepper(
+                label: 'Number of people',
+                value: _persons,
+                min: 1,
+                max: 20,
+                onChanged: (value) => setState(() => _persons = value),
+              ),
+              _BudgetStepper(
+                label: 'Trip duration (days)',
+                value: _days,
+                min: 1,
+                max: 30,
+                onChanged: (value) => setState(() => _days = value),
+              ),
               Card(
                 color: Theme.of(context).colorScheme.primaryContainer,
                 child: Padding(
@@ -1030,21 +1182,66 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Estimate for $_persons traveler(s), $_days day(s)', style: Theme.of(context).textTheme.titleMedium),
+                      Text(
+                        'Estimate for $_persons traveler(s), $_days day(s)',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
                       const SizedBox(height: 12),
-                      _EstimateRow(label: 'Travel ($_origin to ${widget.destination.district})', value: _travelCost * _persons),
-                      _EstimateRow(label: 'Hotel (${_days - 1 < 1 ? 1 : _days - 1} night(s))', value: _hotelCost * _persons * (_days - 1).clamp(1, 30)),
-                      _EstimateRow(label: 'Food and dining', value: _foodCost * _persons * _days),
-                      _EstimateRow(label: 'Guide service', value: _guideCost * _days),
-                      _EstimateRow(label: 'Local transport and activities', value: _localTransport * _persons * _days),
+                      _EstimateRow(
+                        label:
+                            'Travel ($_origin to ${widget.destination.district})',
+                        value: _travelCost * _persons,
+                      ),
+                      _EstimateRow(
+                        label:
+                            'Hotel (${_days - 1 < 1 ? 1 : _days - 1} night(s))',
+                        value: _hotelCost * _persons * (_days - 1).clamp(1, 30),
+                      ),
+                      _EstimateRow(
+                        label: 'Food and dining',
+                        value: _foodCost * _persons * _days,
+                      ),
+                      _EstimateRow(
+                        label: 'Guide service',
+                        value: _guideCost * _days,
+                      ),
+                      _EstimateRow(
+                        label: 'Local transport and activities',
+                        value: _localTransport * _persons * _days,
+                      ),
                       const Divider(height: 22),
-                      _EstimateRow(label: 'Total estimated cost', value: _total, emphasize: true),
+                      _EstimateRow(
+                        label: 'Total estimated cost',
+                        value: _total,
+                        emphasize: true,
+                      ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 8),
-              Text('Rates are estimates in BDT and can change by season and availability.', style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                'Rates are estimates in BDT and can change by season and availability.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.pop(
+                    context,
+                    _BudgetResult(checkIn: _checkIn, persons: _persons),
+                  ),
+                  icon: const Icon(Icons.event_available_outlined),
+                  label: const Text('Book this trip'),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Continue to booking with this plan and estimate.',
+                style: Theme.of(context).textTheme.bodySmall,
+                textAlign: TextAlign.center,
+              ),
             ],
           ),
         ),
@@ -1058,7 +1255,8 @@ class _BudgetSheetState extends State<_BudgetSheet> {
       context: context,
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 730)),
-      initialDate: initial ?? DateTime.now().add(Duration(days: isCheckIn ? 1 : 4)),
+      initialDate:
+          initial ?? DateTime.now().add(Duration(days: isCheckIn ? 1 : 4)),
     );
     if (date == null) return;
     setState(() {
@@ -1074,7 +1272,12 @@ class _BudgetSheetState extends State<_BudgetSheet> {
 }
 
 class _BudgetDateRow extends StatelessWidget {
-  const _BudgetDateRow({required this.checkIn, required this.checkOut, required this.onCheckIn, required this.onCheckOut});
+  const _BudgetDateRow({
+    required this.checkIn,
+    required this.checkOut,
+    required this.onCheckIn,
+    required this.onCheckOut,
+  });
 
   final DateTime? checkIn;
   final DateTime? checkOut;
@@ -1084,15 +1287,33 @@ class _BudgetDateRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      Expanded(child: OutlinedButton.icon(onPressed: onCheckIn, icon: const Icon(Icons.login_outlined), label: Text(checkIn == null ? 'Check-in' : _shortDate(checkIn!)))),
+      Expanded(
+        child: OutlinedButton.icon(
+          onPressed: onCheckIn,
+          icon: const Icon(Icons.login_outlined),
+          label: Text(checkIn == null ? 'Check-in' : _shortDate(checkIn!)),
+        ),
+      ),
       const SizedBox(width: 10),
-      Expanded(child: OutlinedButton.icon(onPressed: onCheckOut, icon: const Icon(Icons.logout_outlined), label: Text(checkOut == null ? 'Check-out' : _shortDate(checkOut!)))),
+      Expanded(
+        child: OutlinedButton.icon(
+          onPressed: onCheckOut,
+          icon: const Icon(Icons.logout_outlined),
+          label: Text(checkOut == null ? 'Check-out' : _shortDate(checkOut!)),
+        ),
+      ),
     ],
   );
 }
 
 class _BudgetDropdown extends StatelessWidget {
-  const _BudgetDropdown({required this.label, required this.value, this.items, this.labels, required this.onChanged});
+  const _BudgetDropdown({
+    required this.label,
+    required this.value,
+    this.items,
+    this.labels,
+    required this.onChanged,
+  });
 
   final String label;
   final String value;
@@ -1107,16 +1328,37 @@ class _BudgetDropdown extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 10),
       child: DropdownButtonFormField<String>(
         initialValue: value,
-        decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
-        items: values.map((item) => DropdownMenuItem(value: item, child: Text(labels?[item] ?? item, overflow: TextOverflow.ellipsis))).toList(),
-        onChanged: (next) { if (next != null) onChanged(next); },
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+        ),
+        items: values
+            .map(
+              (item) => DropdownMenuItem(
+                value: item,
+                child: Text(
+                  labels?[item] ?? item,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            )
+            .toList(),
+        onChanged: (next) {
+          if (next != null) onChanged(next);
+        },
       ),
     );
   }
 }
 
 class _BudgetStepper extends StatelessWidget {
-  const _BudgetStepper({required this.label, required this.value, required this.min, required this.max, required this.onChanged});
+  const _BudgetStepper({
+    required this.label,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+  });
 
   final String label;
   final int value;
@@ -1128,15 +1370,32 @@ class _BudgetStepper extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     children: [
       Expanded(child: Text(label)),
-      IconButton.outlined(onPressed: value > min ? () => onChanged(value - 1) : null, icon: const Icon(Icons.remove)),
-      SizedBox(width: 38, child: Text('$value', textAlign: TextAlign.center, style: Theme.of(context).textTheme.titleMedium)),
-      IconButton.outlined(onPressed: value < max ? () => onChanged(value + 1) : null, icon: const Icon(Icons.add)),
+      IconButton.outlined(
+        onPressed: value > min ? () => onChanged(value - 1) : null,
+        icon: const Icon(Icons.remove),
+      ),
+      SizedBox(
+        width: 38,
+        child: Text(
+          '$value',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+      ),
+      IconButton.outlined(
+        onPressed: value < max ? () => onChanged(value + 1) : null,
+        icon: const Icon(Icons.add),
+      ),
     ],
   );
 }
 
 class _EstimateRow extends StatelessWidget {
-  const _EstimateRow({required this.label, required this.value, this.emphasize = false});
+  const _EstimateRow({
+    required this.label,
+    required this.value,
+    this.emphasize = false,
+  });
 
   final String label;
   final int value;
@@ -1145,7 +1404,20 @@ class _EstimateRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Row(children: [Expanded(child: Text(label, style: emphasize ? Theme.of(context).textTheme.titleMedium : null)), Text('৳${_money(value)}', style: emphasize ? Theme.of(context).textTheme.titleLarge : null)]),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: emphasize ? Theme.of(context).textTheme.titleMedium : null,
+          ),
+        ),
+        Text(
+          '৳${_money(value)}',
+          style: emphasize ? Theme.of(context).textTheme.titleLarge : null,
+        ),
+      ],
+    ),
   );
 }
 
@@ -1163,9 +1435,40 @@ class _AvailableSheet extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Padding(padding: const EdgeInsets.fromLTRB(20, 0, 20, 10), child: Text('Available near ${destination.name}', style: Theme.of(context).textTheme.headlineMedium)),
-            const TabBar(isScrollable: true, tabs: [Tab(icon: Icon(Icons.hotel_outlined), text: 'Hotels'), Tab(icon: Icon(Icons.directions_car_outlined), text: 'Vehicles'), Tab(icon: Icon(Icons.restaurant_outlined), text: 'Restaurants'), Tab(icon: Icon(Icons.beach_access_outlined), text: 'Resorts'), Tab(icon: Icon(Icons.local_activity_outlined), text: 'Activities')]),
-            Expanded(child: TabBarView(children: [_AvailableList(items: _availableHotels), _AvailableList(items: _availableVehicles), _AvailableList(items: _availableRestaurants), _AvailableList(items: _availableResorts), _AvailableList(items: _availableActivities)])),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
+              child: Text(
+                'Available near ${destination.name}',
+                style: Theme.of(context).textTheme.headlineMedium,
+              ),
+            ),
+            const TabBar(
+              isScrollable: true,
+              tabs: [
+                Tab(icon: Icon(Icons.hotel_outlined), text: 'Hotels'),
+                Tab(
+                  icon: Icon(Icons.directions_car_outlined),
+                  text: 'Vehicles',
+                ),
+                Tab(icon: Icon(Icons.restaurant_outlined), text: 'Restaurants'),
+                Tab(icon: Icon(Icons.beach_access_outlined), text: 'Resorts'),
+                Tab(
+                  icon: Icon(Icons.local_activity_outlined),
+                  text: 'Activities',
+                ),
+              ],
+            ),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _AvailableList(items: _availableHotels),
+                  _AvailableList(items: _availableVehicles),
+                  _AvailableList(items: _availableRestaurants),
+                  _AvailableList(items: _availableResorts),
+                  _AvailableList(items: _availableActivities),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -1183,19 +1486,123 @@ class _AvailableList extends StatelessWidget {
     padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
     itemCount: items.length,
     separatorBuilder: (_, _) => const SizedBox(height: 8),
-    itemBuilder: (context, index) => Card(child: ListTile(leading: Icon(Icons.check_circle_outline, color: Theme.of(context).colorScheme.primary), title: Text(items[index]), subtitle: const Text('Available to arrange, subject to date and capacity.'))),
+    itemBuilder: (context, index) => Card(
+      child: ListTile(
+        leading: Icon(
+          Icons.check_circle_outline,
+          color: Theme.of(context).colorScheme.primary,
+        ),
+        title: Text(items[index]),
+        subtitle: const Text(
+          'Available to arrange, subject to date and capacity.',
+        ),
+      ),
+    ),
   );
 }
 
-const _transportLabels = {'bus_nonac': 'Bus - Non-AC', 'bus_ac': 'Bus - AC coach', 'bus_sleeper': 'Bus - Sleeper / business class', 'train_shovon': 'Train - Shovon (non-AC)', 'train_chair': 'Train - Chair / first seat', 'train_ac': 'Train - AC chair / cabin', 'train_sleeper': 'Train - Sleeper / cabin', 'launch_deck': 'Launch - Deck', 'launch_cabin': 'Launch - Cabin', 'ferry': 'Ferry / Ro-Ro', 'boat': 'Boat / engine boat', 'microbus': 'Microbus / private minivan', 'private_car': 'Private car / rent-a-car', 'cng': 'CNG / auto-rickshaw', 'jeep': 'Hill Jeep / 4x4', 'air': 'Domestic flight'};
-const _hotelLabels = {'normal': 'Normal / economy hotel', 'guesthouse': 'Guesthouse / lodging house', 'homestay': 'Homestay / cottage / boat cabin', 'rest_house': 'Government rest house / motel', 'beach_resort': 'Beach resort / sea-view hotel', 'hill_cottage': 'Hill cottage / mountain resort', 'forest_lodge': 'Forest lodge / eco resort', '3star': '3-star hotel / resort', 'boutique': 'Boutique hotel / eco resort', '5star': '5-star luxury hotel / resort', 'luxury_suite': 'Luxury suite / premium villa'};
-const _foodLabels = {'street': 'Street food / local snacks', 'mess': 'Local mess / student canteen', 'breakfast': 'Tea stall / breakfast stop', 'standard': 'Standard restaurant dining', 'family': 'Family restaurant / local diner', 'fastfood': 'Fast food / cafe', 'seafood': 'Seafood restaurant', 'hill_cuisine': 'Hill cuisine / tribal meal', 'tea_garden': 'Tea garden meal', 'boat_meal': 'Boat / launch meal', 'buffet': 'Hotel buffet dining', 'fine_dining': 'Fine dining / premium restaurant', 'resort_dining': 'Resort dining / sea-view dinner'};
-const _guideLabels = {'none': 'No guide / self-explore', 'local': 'Local spot guide', 'licensed': 'Professional licensed guide', 'beach': 'Beach guide', 'hill': 'Hill trek guide', 'forest': 'Forest / Sundarbans guide', 'eco': 'Eco-tour guide', 'heritage': 'Heritage guide', 'boat': 'Haor / boat guide', 'tribal': 'Tribal / community guide', 'translator': 'Translator / language support', 'private_vip': 'Private VIP guide'};
-const _availableHotels = ['Economy hotel', 'Guesthouse', 'Homestay / cottage', '3-star hotel', '5-star hotel', 'Government rest house'];
-const _availableVehicles = ['Non-AC bus', 'AC coach', 'Train chair / cabin', 'Launch deck / cabin', 'CNG / auto-rickshaw', 'Microbus / private car', 'Hill Jeep / 4x4'];
-const _availableRestaurants = ['Local restaurant', 'Family restaurant', 'Seafood restaurant', 'Hill cuisine', 'Tea garden dining', 'Hotel buffet', 'Fine dining'];
-const _availableResorts = ['Beach resort', 'Mountain resort', 'Eco resort', 'Forest lodge', 'Premium resort villa', 'Government motel'];
-const _availableActivities = ['Local sightseeing', 'Boat ride', 'Beach activities', 'Hill trekking', 'Forest / eco tour', 'Cultural and heritage tour'];
+const _transportLabels = {
+  'bus_nonac': 'Bus - Non-AC',
+  'bus_ac': 'Bus - AC coach',
+  'bus_sleeper': 'Bus - Sleeper / business class',
+  'train_shovon': 'Train - Shovon (non-AC)',
+  'train_chair': 'Train - Chair / first seat',
+  'train_ac': 'Train - AC chair / cabin',
+  'train_sleeper': 'Train - Sleeper / cabin',
+  'launch_deck': 'Launch - Deck',
+  'launch_cabin': 'Launch - Cabin',
+  'ferry': 'Ferry / Ro-Ro',
+  'boat': 'Boat / engine boat',
+  'microbus': 'Microbus / private minivan',
+  'private_car': 'Private car / rent-a-car',
+  'cng': 'CNG / auto-rickshaw',
+  'jeep': 'Hill Jeep / 4x4',
+  'air': 'Domestic flight',
+};
+const _hotelLabels = {
+  'normal': 'Normal / economy hotel',
+  'guesthouse': 'Guesthouse / lodging house',
+  'homestay': 'Homestay / cottage / boat cabin',
+  'rest_house': 'Government rest house / motel',
+  'beach_resort': 'Beach resort / sea-view hotel',
+  'hill_cottage': 'Hill cottage / mountain resort',
+  'forest_lodge': 'Forest lodge / eco resort',
+  '3star': '3-star hotel / resort',
+  'boutique': 'Boutique hotel / eco resort',
+  '5star': '5-star luxury hotel / resort',
+  'luxury_suite': 'Luxury suite / premium villa',
+};
+const _foodLabels = {
+  'street': 'Street food / local snacks',
+  'mess': 'Local mess / student canteen',
+  'breakfast': 'Tea stall / breakfast stop',
+  'standard': 'Standard restaurant dining',
+  'family': 'Family restaurant / local diner',
+  'fastfood': 'Fast food / cafe',
+  'seafood': 'Seafood restaurant',
+  'hill_cuisine': 'Hill cuisine / tribal meal',
+  'tea_garden': 'Tea garden meal',
+  'boat_meal': 'Boat / launch meal',
+  'buffet': 'Hotel buffet dining',
+  'fine_dining': 'Fine dining / premium restaurant',
+  'resort_dining': 'Resort dining / sea-view dinner',
+};
+const _guideLabels = {
+  'none': 'No guide / self-explore',
+  'local': 'Local spot guide',
+  'licensed': 'Professional licensed guide',
+  'beach': 'Beach guide',
+  'hill': 'Hill trek guide',
+  'forest': 'Forest / Sundarbans guide',
+  'eco': 'Eco-tour guide',
+  'heritage': 'Heritage guide',
+  'boat': 'Haor / boat guide',
+  'tribal': 'Tribal / community guide',
+  'translator': 'Translator / language support',
+  'private_vip': 'Private VIP guide',
+};
+const _availableHotels = [
+  'Economy hotel',
+  'Guesthouse',
+  'Homestay / cottage',
+  '3-star hotel',
+  '5-star hotel',
+  'Government rest house',
+];
+const _availableVehicles = [
+  'Non-AC bus',
+  'AC coach',
+  'Train chair / cabin',
+  'Launch deck / cabin',
+  'CNG / auto-rickshaw',
+  'Microbus / private car',
+  'Hill Jeep / 4x4',
+];
+const _availableRestaurants = [
+  'Local restaurant',
+  'Family restaurant',
+  'Seafood restaurant',
+  'Hill cuisine',
+  'Tea garden dining',
+  'Hotel buffet',
+  'Fine dining',
+];
+const _availableResorts = [
+  'Beach resort',
+  'Mountain resort',
+  'Eco resort',
+  'Forest lodge',
+  'Premium resort villa',
+  'Government motel',
+];
+const _availableActivities = [
+  'Local sightseeing',
+  'Boat ride',
+  'Beach activities',
+  'Hill trekking',
+  'Forest / eco tour',
+  'Cultural and heritage tour',
+];
 
 class _ReviewsSheet extends StatelessWidget {
   const _ReviewsSheet({required this.future, required this.destinationName});
@@ -1302,10 +1709,17 @@ class _ReviewsSheet extends StatelessWidget {
 }
 
 class _BookingSheet extends StatefulWidget {
-  const _BookingSheet({required this.controller, required this.destination});
+  const _BookingSheet({
+    required this.controller,
+    required this.destination,
+    this.initialDate,
+    this.initialPersons,
+  });
 
   final AppController controller;
   final Destination destination;
+  final DateTime? initialDate;
+  final int? initialPersons;
 
   @override
   State<_BookingSheet> createState() => _BookingSheetState();
@@ -1316,6 +1730,13 @@ class _BookingSheetState extends State<_BookingSheet> {
   int _persons = 1;
   bool _submitting = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _date = widget.initialDate;
+    _persons = (widget.initialPersons ?? 1).clamp(1, 20);
+  }
 
   int get _estimate {
     final rate = switch (widget.destination.budget.toLowerCase()) {
@@ -1421,12 +1842,19 @@ class _BookingSheetState extends State<_BookingSheet> {
   );
 
   Future<void> _pickDate() async {
-    final tomorrow = DateTime.now().add(const Duration(days: 1));
+    final minimumDate = DateTime.now().add(const Duration(days: 3));
+    final firstDate = DateTime(
+      minimumDate.year,
+      minimumDate.month,
+      minimumDate.day,
+    );
     final value = await showDatePicker(
       context: context,
-      firstDate: DateTime(tomorrow.year, tomorrow.month, tomorrow.day),
+      firstDate: firstDate,
       lastDate: DateTime.now().add(const Duration(days: 365)),
-      initialDate: _date ?? tomorrow,
+      initialDate: _date != null && !_date!.isBefore(firstDate)
+          ? _date!
+          : firstDate,
     );
     if (value != null) setState(() => _date = value);
   }
@@ -1434,6 +1862,18 @@ class _BookingSheetState extends State<_BookingSheet> {
   Future<void> _submit() async {
     if (_date == null) {
       setState(() => _error = 'Choose a travel date first.');
+      return;
+    }
+    final minimumDate = DateTime.now().add(const Duration(days: 3));
+    final firstDate = DateTime(
+      minimumDate.year,
+      minimumDate.month,
+      minimumDate.day,
+    );
+    if (_date!.isBefore(firstDate)) {
+      setState(
+        () => _error = 'Bookings must be made at least 3 days before travel.',
+      );
       return;
     }
     setState(() {

@@ -9,7 +9,8 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME || 'torisom_db',
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  dateStrings: true
 });
 
 module.exports = pool;

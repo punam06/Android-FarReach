@@ -6,9 +6,14 @@ import '../widgets/destination_card.dart';
 import 'destination_detail_screen.dart';
 
 class SavedScreen extends StatelessWidget {
-  const SavedScreen({super.key, required this.controller});
+  const SavedScreen({
+    super.key,
+    required this.controller,
+    required this.onGoToProfile,
+  });
 
   final AppController controller;
+  final VoidCallback onGoToProfile;
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -97,6 +102,7 @@ class SavedScreen extends StatelessWidget {
         builder: (_) => DestinationDetailScreen(
           controller: controller,
           destination: destination,
+          onGoToProfile: onGoToProfile,
         ),
       ),
     );

@@ -9,10 +9,16 @@ const multer = require('multer');
 const db = require('./db');
 
 const projectRoot = path.join(__dirname, '..');
-const envPaths = [path.join(__dirname, '.env'), path.join(projectRoot, '.env')];
-for (const envPath of envPaths) {
+// The project-root .env holds the real provider keys (weather, Gemini, DB).
+// Load the server .env first for defaults, then let the root file override it
+// so placeholder values in server/.env never shadow the configured keys.
+const envPaths = [
+  { path: path.join(__dirname, '.env'), override: false },
+  { path: path.join(projectRoot, '.env'), override: true },
+];
+for (const { path: envPath, override } of envPaths) {
   if (fs.existsSync(envPath)) {
-    dotenv.config({ path: envPath, override: false });
+    dotenv.config({ path: envPath, override });
   }
 }
 
@@ -137,6 +143,7 @@ app.get('/api/health', (req, res) => {
 
 const MAX_BOOKING_PERSONS = 20;
 const BOOKING_TIME_ZONE = 'Asia/Dhaka';
+const MIN_BOOKING_LEAD_DAYS = 3;
 
 function parsePositiveInteger(value) {
   const normalized = typeof value === 'string' ? value.trim() : value;
@@ -170,6 +177,17 @@ function currentDateInTimeZone(timeZone) {
 
 function getApiKey() {
   const key = (process.env.OPENWEATHER_API_KEY ?? '').trim();
+  if (!key || key === 'PUT_YOUR_KEY_HERE' || key === 'YOUR_API_KEY_HERE') return null;
+  return key;
+}
+
+function getGeminiKey() {
+  const key = (
+    process.env.GOOGLE_GEMINI_API_KEY ??
+    process.env.GOOGLE_Gemini_API_KEY ??
+    process.env.GEMINI_API_KEY ??
+    ''
+  ).trim();
   if (!key || key === 'PUT_YOUR_KEY_HERE' || key === 'YOUR_API_KEY_HERE') return null;
   return key;
 }
@@ -376,12 +394,16 @@ app.get('/api/weather', async (req, res) => {
     const q = encodeURIComponent(`${district},BD`);
     const url = `https://api.openweathermap.org/data/2.5/weather?q=${q}&units=metric&appid=${key}`;
     const r = await fetch(url);
-    if (!r.ok) return res.status(502).json({ error: 'Weather lookup failed' });
+    if (!r.ok) {
+      console.warn(`[weather] provider returned ${r.status}; using mock weather`);
+      return res.json(createMockCurrent(district));
+    }
 
     const data = await r.json();
     res.json(data);
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message || 'Server error' });
+    console.warn(`[weather] provider unavailable; using mock weather: ${err.message}`);
+    res.json(createMockCurrent(district));
   }
 });
 
@@ -405,13 +427,256 @@ app.get('/api/forecast', async (req, res) => {
     const q = encodeURIComponent(`${district},BD`);
     const url = `https://api.openweathermap.org/data/2.5/forecast?q=${q}&units=metric&appid=${key}`;
     const r = await fetch(url);
-    if (!r.ok) return res.status(502).json({ error: 'Forecast lookup failed' });
+    if (!r.ok) {
+      console.warn(`[forecast] provider returned ${r.status}; using mock forecast`);
+      const data = createMockForecast(district, date);
+      const summary = summarizeForecast(data, date);
+      return res.json({ district, date, data, summary });
+    }
 
     const data = await r.json();
     const summary = summarizeForecast(data, date);
     res.json({ district, date, data, summary });
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message || 'Server error' });
+    console.warn(`[forecast] provider unavailable; using mock forecast: ${err.message}`);
+    const data = createMockForecast(district, date);
+    const summary = summarizeForecast(data, date);
+    res.json({ district, date, data, summary });
+  }
+});
+
+const CHAT_SYSTEM_INSTRUCTION = [
+  'You are the FarReach travel assistant for a Bangladesh tourism app.',
+  'Help users choose destinations, plan trip budgets, understand weather and',
+  'safety suggestions, and manage saved places and bookings.',
+  'Keep answers short, practical, and friendly. Use plain sentences and avoid',
+  'markdown tables. Only answer questions related to travel in Bangladesh and',
+  'the FarReach app. If a request is unrelated, politely redirect the user to',
+  'destinations, budgets, weather, saved places, or bookings.',
+].join(' ');
+
+const PLANNER_SYSTEM_INSTRUCTION = [
+  'You are the FarReach AI trip planner for Bangladesh tourism.',
+  'Build a realistic day-by-day itinerary for the traveler preferences given.',
+  'Use ONLY destinations from the shortlist provided; never invent place names.',
+  'Keep it under 220 words with short labelled days (Day 1, Day 2, ...), each',
+  'with a morning, afternoon and evening highlight, a rough cost in BDT, and a',
+  'transport tip. Recommend 2 to 4 destinations in total. Use plain sentences',
+  'and avoid markdown tables.',
+].join(' ');
+
+function buildChatContents(message, history) {
+  const contents = [];
+  if (Array.isArray(history)) {
+    for (const turn of history.slice(-10)) {
+      const text = (turn?.text ?? '').toString().trim();
+      if (!text) continue;
+      const role = turn?.role === 'user' ? 'user' : 'model';
+      contents.push({ role, parts: [{ text }] });
+    }
+  }
+  contents.push({ role: 'user', parts: [{ text: message }] });
+  return contents;
+}
+
+function extractGeminiText(payload) {
+  const candidate = Array.isArray(payload?.candidates) ? payload.candidates[0] : null;
+  const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+  return parts
+    .map((part) => (part?.text ?? '').toString())
+    .join('')
+    .trim();
+}
+
+function geminiModelCandidates() {
+  const configured = (process.env.GEMINI_MODEL ?? '').trim();
+  return [...new Set([
+    configured,
+    'gemini-3.8-flash',
+    'gemini-flash-latest',
+    'gemini-3.7-flash',
+    'gemini-2.5-flash-lite',
+    'gemini-2.5-flash',
+  ].filter(Boolean))];
+}
+
+async function requestGeminiReply(key, message, history) {
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: CHAT_SYSTEM_INSTRUCTION }] },
+    contents: buildChatContents(message, history),
+    generationConfig: { temperature: 0.7, maxOutputTokens: 512 },
+  });
+
+  let lastError = 'Travel assistant is unavailable';
+  for (const model of geminiModelCandidates()) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key,
+          },
+          body,
+        },
+      );
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        console.warn(`[chat] ${model} returned ${response.status}: ${detail.slice(0, 160)}`);
+        lastError = 'Travel assistant is unavailable';
+        continue;
+      }
+      const reply = extractGeminiText(await response.json());
+      if (reply) return reply;
+    } catch (modelError) {
+      console.warn(`[chat] ${model} failed: ${modelError.message}`);
+      lastError = 'Travel assistant is unavailable';
+    }
+  }
+  throw new Error(lastError);
+}
+
+const PLANNER_MAX_CATALOG = 80;
+
+function sanitizePlannerCatalog(catalog) {
+  if (!Array.isArray(catalog)) return [];
+  const seen = new Set();
+  const items = [];
+  for (const entry of catalog.slice(0, PLANNER_MAX_CATALOG)) {
+    const name = (entry?.name ?? '').toString().trim().slice(0, 120);
+    if (!name || seen.has(name.toLowerCase())) continue;
+    seen.add(name.toLowerCase());
+    items.push({
+      name,
+      district: (entry?.district ?? '').toString().trim().slice(0, 80),
+      category: (entry?.category ?? '').toString().trim().slice(0, 60),
+      budget: (entry?.budget ?? '').toString().trim().slice(0, 40),
+    });
+  }
+  return items;
+}
+
+function buildPlannerPrompt(preferences, catalog) {
+  const interests = Array.isArray(preferences.interests)
+    ? preferences.interests
+        .map((item) => item.toString().trim())
+        .filter(Boolean)
+        .slice(0, 8)
+    : [];
+  const lines = [
+    'Traveler preferences:',
+    `- Trip length: ${preferences.days} day(s)`,
+    `- Travelers: ${preferences.travelers}`,
+    `- Budget tier: ${preferences.budget || 'Mid'}`,
+    `- Starting district: ${preferences.origin || 'Dhaka'}`,
+    `- Interests: ${interests.length ? interests.join(', ') : 'general sightseeing'}`,
+  ];
+  const notes = (preferences.notes ?? '').toString().trim().slice(0, 400);
+  if (notes) lines.push(`- Extra notes: ${notes}`);
+  lines.push('', 'Shortlisted destinations (name — district — category — budget):');
+  if (catalog.length === 0) {
+    lines.push('(catalog unavailable - use well known Bangladesh destinations)');
+  } else {
+    catalog.forEach((item, index) => {
+      lines.push(
+        `${index + 1}. ${item.name} — ${item.district || 'Bangladesh'} — ${item.category || 'Explore'} — ${item.budget || 'Mid'}`,
+      );
+    });
+  }
+  lines.push('', 'Create the itinerary now.');
+  return lines.join('\n');
+}
+
+async function requestGeminiPlan(key, prompt) {
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: PLANNER_SYSTEM_INSTRUCTION }] },
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.8, maxOutputTokens: 1024 },
+  });
+
+  let lastError = 'Trip planner is unavailable';
+  for (const model of geminiModelCandidates()) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': key,
+          },
+          body,
+        },
+      );
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        console.warn(`[planner] ${model} returned ${response.status}: ${detail.slice(0, 160)}`);
+        lastError = 'Trip planner is unavailable';
+        continue;
+      }
+      const plan = extractGeminiText(await response.json());
+      if (plan) return plan;
+    } catch (modelError) {
+      console.warn(`[planner] ${model} failed: ${modelError.message}`);
+      lastError = 'Trip planner is unavailable';
+    }
+  }
+  throw new Error(lastError);
+}
+
+app.post('/api/planner', async (req, res) => {
+  try {
+    const days = Number.parseInt(req.body?.days, 10);
+    const travelers = Number.parseInt(req.body?.travelers, 10);
+    if (!Number.isFinite(days) || days < 1 || days > 14) {
+      return res.status(400).json({ error: 'days must be between 1 and 14' });
+    }
+    if (!Number.isFinite(travelers) || travelers < 1 || travelers > 20) {
+      return res.status(400).json({ error: 'travelers must be between 1 and 20' });
+    }
+
+    const key = getGeminiKey();
+    if (!key) {
+      return res.status(503).json({ error: 'Trip planner is not configured' });
+    }
+
+    const preferences = {
+      days,
+      travelers,
+      budget: (req.body?.budget ?? 'Mid').toString().trim().slice(0, 40),
+      origin: (req.body?.origin ?? 'Dhaka').toString().trim().slice(0, 80),
+      interests: req.body?.interests,
+      notes: req.body?.notes,
+    };
+    const catalog = sanitizePlannerCatalog(req.body?.catalog);
+    const prompt = buildPlannerPrompt(preferences, catalog);
+    const plan = await requestGeminiPlan(key, prompt);
+    return res.json({ plan });
+  } catch (err) {
+    console.warn(`[planner] error: ${err.message}`);
+    return res.status(502).json({ error: 'Trip planner is unavailable' });
+  }
+});
+
+app.post('/api/chat', async (req, res) => {
+  try {
+    const message = (req.body?.message ?? '').toString().trim();
+    if (!message) return res.status(400).json({ error: 'message is required' });
+    if (message.length > 2000) {
+      return res.status(400).json({ error: 'message is too long' });
+    }
+
+    const key = getGeminiKey();
+    if (!key) {
+      return res.status(503).json({ error: 'Travel assistant is not configured' });
+    }
+
+    const reply = await requestGeminiReply(key, message, req.body?.history);
+    return res.json({ reply });
+  } catch (err) {
+    console.warn(`[chat] assistant error: ${err.message}`);
+    return res.status(502).json({ error: 'Travel assistant is unavailable' });
   }
 });
 
@@ -1040,6 +1305,11 @@ app.post('/api/auth/login', async (req, res) => {
     res.json({ ok: true, token, user: publicUser(user) });
   } catch (err) {
     console.error('Login error:', err);
+    if (err.code === 'ECONNREFUSED' || err.fatal) {
+      return res.status(503).json({
+        error: 'Authentication database is unavailable. Start MySQL and try again.',
+      });
+    }
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1050,6 +1320,121 @@ app.post('/api/auth/logout', (req, res) => {
   const token = getAuthToken(req);
   if (token) sessionTokens.delete(token);
   return res.json({ ok: true });
+});
+
+// --- FIREBASE ID TOKEN VERIFICATION ---
+// The Flutter app authenticates users with Firebase Auth. Those ID tokens are
+// signed by Google and are not part of our in-memory session store, so we
+// verify them here and exchange them for a normal FarReach session token.
+const FIREBASE_PROJECT_ID =
+  (process.env.FIREBASE_PROJECT_ID ?? 'farreach-tourism-bd').trim();
+const FIREBASE_CERT_URL =
+  'https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com';
+let firebaseCertCache = { certs: null, expiresAt: 0 };
+
+async function getFirebaseCertificates() {
+  const now = Date.now();
+  if (firebaseCertCache.certs && now < firebaseCertCache.expiresAt) {
+    return firebaseCertCache.certs;
+  }
+  const response = await fetch(FIREBASE_CERT_URL);
+  if (!response.ok) {
+    throw new Error(`Could not fetch Firebase signing certificates (${response.status})`);
+  }
+  const cacheControl = response.headers.get('cache-control') ?? '';
+  const maxAgeMatch = /max-age=(\d+)/.exec(cacheControl);
+  const ttlMs = maxAgeMatch ? Number(maxAgeMatch[1]) * 1000 : 60 * 60 * 1000;
+  const certs = await response.json();
+  firebaseCertCache = { certs, expiresAt: now + ttlMs };
+  return certs;
+}
+
+function decodeBase64Url(value) {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+  return Buffer.from(padded, 'base64').toString('utf8');
+}
+
+async function verifyFirebaseIdToken(idToken) {
+  if (typeof idToken !== 'string' || idToken.split('.').length !== 3) {
+    throw new Error('Malformed Firebase token');
+  }
+  const [encodedHeader, encodedPayload, encodedSignature] = idToken.split('.');
+  const header = JSON.parse(decodeBase64Url(encodedHeader));
+  if (header.alg !== 'RS256' || !header.kid) {
+    throw new Error('Unsupported Firebase token signature');
+  }
+
+  const certs = await getFirebaseCertificates();
+  const certificate = certs[header.kid];
+  if (!certificate) throw new Error('Unknown Firebase signing key');
+
+  const publicKey = new crypto.X509Certificate(certificate).publicKey;
+  const signedData = Buffer.from(`${encodedHeader}.${encodedPayload}`);
+  const signature = Buffer.from(encodedSignature, 'base64url');
+  if (!crypto.verify('RSA-SHA256', signedData, publicKey, signature)) {
+    throw new Error('Invalid Firebase token signature');
+  }
+
+  const payload = JSON.parse(decodeBase64Url(encodedPayload));
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  if (payload.aud !== FIREBASE_PROJECT_ID) throw new Error('Firebase token audience mismatch');
+  if (payload.iss !== `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`) {
+    throw new Error('Firebase token issuer mismatch');
+  }
+  if (typeof payload.exp !== 'number' || payload.exp <= nowSeconds) {
+    throw new Error('Firebase token has expired');
+  }
+  if (typeof payload.iat === 'number' && payload.iat > nowSeconds + 300) {
+    throw new Error('Firebase token issued in the future');
+  }
+  if (!payload.sub) throw new Error('Firebase token is missing a subject');
+  return payload;
+}
+
+async function upsertFirebaseUser(payload) {
+  const email = normalizeEmail(payload.email);
+  if (!email) throw new Error('Firebase account has no email');
+
+  let user = await findUserByEmail(email);
+  if (!user) {
+    const name =
+      normalizeDisplayName(payload.name) ||
+      (email.includes('@') ? email.split('@')[0] : 'Traveler');
+    const [result] = await db.query(
+      'INSERT INTO users (name, email, password_hash, is_verified) VALUES (?, ?, ?, 1)',
+      [name, email, '!firebase']
+    );
+    user = { id: result.insertId, name, email, role: 'user' };
+  }
+  return user;
+}
+
+app.post('/api/auth/firebase', async (req, res) => {
+  try {
+    const idToken = (req.body?.idToken ?? req.body?.id_token ?? '').toString().trim();
+    if (!idToken) return res.status(400).json({ error: 'idToken is required' });
+
+    let payload;
+    try {
+      payload = await verifyFirebaseIdToken(idToken);
+    } catch (verifyError) {
+      console.warn(`[auth] Firebase token rejected: ${verifyError.message}`);
+      return res.status(401).json({ error: 'Invalid or expired sign-in session' });
+    }
+
+    const user = await upsertFirebaseUser(payload);
+    const token = createSession(user);
+    return res.json({ ok: true, token, user: publicUser(user) });
+  } catch (err) {
+    console.error('[auth] Firebase exchange failed:', err.message);
+    if (err.code === 'ECONNREFUSED' || err.fatal) {
+      return res.status(503).json({
+        error: 'Authentication database is unavailable. Start MySQL and try again.',
+      });
+    }
+    return res.status(500).json({ error: 'Sign in could not be completed' });
+  }
 });
 
 app.post('/api/hotels/search', async (req, res) => {
@@ -1731,8 +2116,16 @@ app.post('/api/bookings', requireAuth, async (req, res) => {
     if (!isValidDateOnly(booking_date)) {
       return res.status(400).json({ error: 'booking_date must be a valid date in YYYY-MM-DD format' });
     }
-    if (booking_date <= currentDateInTimeZone(BOOKING_TIME_ZONE)) {
-      return res.status(400).json({ error: 'booking_date must be a future date' });
+    const todayInDhaka = currentDateInTimeZone(BOOKING_TIME_ZONE);
+    const [year, month, day] = todayInDhaka.split('-').map(Number);
+    const minimumBookingDate = new Date(
+      Date.UTC(year, month - 1, day + MIN_BOOKING_LEAD_DAYS),
+    );
+    const minimumBookingDateOnly = minimumBookingDate.toISOString().slice(0, 10);
+    if (booking_date < minimumBookingDateOnly) {
+      return res.status(400).json({
+        error: `Bookings must be made at least ${MIN_BOOKING_LEAD_DAYS} days before the travel date.`,
+      });
     }
 
     // Look up spot
@@ -1794,12 +2187,12 @@ app.delete('/api/user/bookings/:id', requireAuth, async (req, res) => {
 
     // Check 24-hour cancellation window: booking_date must be at least 24h away
     if (booking.booking_date) {
-      const bookingDate = new Date(booking.booking_date);
-      const bookingDateOnly = new Date(bookingDate.getFullYear(), bookingDate.getMonth(), bookingDate.getDate());
       const now = new Date();
-      const todayDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-      if (bookingDateOnly < todayDateOnly) {
+      const bookingDate = new Date(`${booking.booking_date}T00:00:00+06:00`);
+      if (Number.isNaN(bookingDate.getTime())) {
+        return res.status(400).json({ error: 'Booking date is invalid.' });
+      }
+      if (bookingDate <= now) {
         return res.status(400).json({
           error: 'Booking date has already passed. Completed bookings cannot be cancelled.'
         });
@@ -1807,7 +2200,7 @@ app.delete('/api/user/bookings/:id', requireAuth, async (req, res) => {
 
       const hoursUntilBooking = (bookingDate.getTime() - now.getTime()) / (1000 * 60 * 60);
 
-      if (hoursUntilBooking < 24) {
+      if (hoursUntilBooking <= 24) {
         return res.status(400).json({
           error: 'Cancellation is not allowed within 24 hours of the booking date.'
         });
@@ -1909,21 +2302,23 @@ async function ensureOtpAttemptSecurityTable() {
 }
 
 async function startServer() {
+  let databaseReady = true;
   try {
     await seedDatabase();
     await ensureOtpAttemptSecurityTable();
-    app.listen(PORT, () => {
-      console.log(`API server listening on http://localhost:${PORT}`);
-    });
   } catch (err) {
-    console.error('[startup] Database initialization failed; API server was not started:', err);
-    try {
-      await db.end();
-    } catch (closeErr) {
-      console.error('[startup] Failed to close the database pool:', closeErr);
-    }
-    process.exitCode = 1;
+    databaseReady = false;
+    console.error(
+      '[startup] Database initialization failed; starting API in degraded mode:',
+      err.message,
+    );
   }
+  app.listen(PORT, () => {
+    console.log(
+      `API server listening on http://localhost:${PORT}` +
+        (databaseReady ? '' : ' (database unavailable)'),
+    );
+  });
 }
 
 if (require.main === module) {

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
 
 import '../models/destination.dart';
 import '../services/api_client.dart';
@@ -83,14 +85,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     const SizedBox(height: 18),
                     Text(
                       'Keep every trip in one place',
-                      style: Theme.of(context).textTheme.headlineMedium
-                          ?.copyWith(color: Colors.white),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.headlineMedium?.copyWith(color: Colors.white),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       'Sync saved places, confirm packages, and manage upcoming journeys.',
-                      style: Theme.of(context).textTheme.bodyLarge
-                          ?.copyWith(color: Colors.white),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyLarge?.copyWith(color: Colors.white),
                     ),
                   ],
                 ),
@@ -120,8 +124,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 _buildLogin(context)
               else
                 _buildSignup(context),
-              const SizedBox(height: 18),
-              const _ImageCredit(),
             ],
           ),
         ),
@@ -140,7 +142,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             style: Theme.of(context).textTheme.headlineMedium,
           ),
           const SizedBox(height: 6),
-          const Text('Sign in with your email and password to access your trips.'),
+          const Text(
+            'Sign in with your email and password to access your trips.',
+          ),
           const SizedBox(height: 20),
           TextField(
             controller: _email,
@@ -245,7 +249,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   labelText: 'Password',
                   prefixIcon: const Icon(Icons.lock_outline),
                   suffixIcon: IconButton(
-                    tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                    tooltip: _obscurePassword
+                        ? 'Show password'
+                        : 'Hide password',
                     onPressed: () =>
                         setState(() => _obscurePassword = !_obscurePassword),
                     icon: Icon(
@@ -331,8 +337,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 keyboardType: TextInputType.number,
                 textAlign: TextAlign.center,
                 maxLength: 6,
-                style: Theme.of(context).textTheme.headlineMedium
-                    ?.copyWith(letterSpacing: 8),
+                style: Theme.of(
+                  context,
+                ).textTheme.headlineMedium?.copyWith(letterSpacing: 8),
                 decoration: const InputDecoration(
                   labelText: 'Verification code',
                   prefixIcon: Icon(Icons.verified_outlined),
@@ -364,7 +371,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   labelText: 'Password',
                   prefixIcon: const Icon(Icons.lock_outline),
                   suffixIcon: IconButton(
-                    tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                    tooltip: _obscurePassword
+                        ? 'Show password'
+                        : 'Hide password',
                     onPressed: () =>
                         setState(() => _obscurePassword = !_obscurePassword),
                     icon: Icon(
@@ -436,10 +445,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _error = null);
     try {
       await widget.controller.login(email, password);
-      if (mounted) _clearSensitiveFields();
+      if (mounted) {
+        _clearSensitiveFields();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Signed in successfully.')),
+        );
+      }
     } catch (error) {
       if (mounted) {
-        setState(() => _error = widget.controller.lastError ?? (error is ApiFailure ? error.message : error.toString()));
+        setState(
+          () => _error =
+              widget.controller.lastError ??
+              (error is ApiFailure ? error.message : error.toString()),
+        );
       }
     }
   }
@@ -474,10 +492,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
           email: email,
           password: password,
         );
-        if (mounted) _clearSensitiveFields();
+        if (mounted) {
+          _clearSensitiveFields();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Account created. Check your email to verify your address.',
+              ),
+            ),
+          );
+        }
       } catch (error) {
         if (mounted) {
-          setState(() => _error = widget.controller.lastError ?? (error is ApiFailure ? error.message : error.toString()));
+          setState(
+            () => _error =
+                widget.controller.lastError ??
+                (error is ApiFailure ? error.message : error.toString()),
+          );
         }
       }
       return;
@@ -529,12 +560,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     } on ApiFailure catch (error) {
       if (mounted) setState(() => _error = error.message);
     } catch (error) {
-      if (mounted) setState(() => _error = widget.controller.lastError ?? error.toString());
+      if (mounted) {
+        setState(
+          () => _error = widget.controller.lastError ?? error.toString(),
+        );
+      }
     }
   }
 
   Future<void> _showForgotPasswordDialog(BuildContext context) async {
-    final resetEmailController = TextEditingController(text: _email.text.trim());
+    final resetEmailController = TextEditingController(
+      text: _email.text.trim(),
+    );
     String? dialogError;
     await showDialog<void>(
       context: context,
@@ -545,7 +582,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('Enter your registered email address to receive a password reset link.'),
+              const Text(
+                'Enter your registered email address to receive a password reset link.',
+              ),
               const SizedBox(height: 14),
               TextField(
                 controller: resetEmailController,
@@ -576,7 +615,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
               onPressed: () async {
                 final email = resetEmailController.text.trim();
                 if (!_validEmail(email)) {
-                  setDialogState(() => dialogError = 'Enter a valid email address.');
+                  setDialogState(
+                    () => dialogError = 'Enter a valid email address.',
+                  );
                   return;
                 }
                 try {
@@ -584,11 +625,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   if (ctx.mounted) {
                     Navigator.of(ctx).pop();
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Password reset email sent to $email')),
+                      SnackBar(
+                        content: Text('Password reset email sent to $email'),
+                      ),
                     );
                   }
                 } catch (e) {
-                  setDialogState(() => dialogError = widget.controller.lastError ?? e.toString());
+                  setDialogState(
+                    () => dialogError =
+                        widget.controller.lastError ?? e.toString(),
+                  );
                 }
               },
               child: const Text('Send link'),
@@ -608,8 +654,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _previewCode = result.previewCode;
         _code.clear();
       });
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('A new code was sent.')));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('A new code was sent.')));
     } on ApiFailure catch (error) {
       if (mounted) setState(() => _error = error.message);
     }
@@ -659,6 +706,10 @@ class _SignedInProfile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = controller.user!;
+    final firebaseUser = FirebaseService.isInitialized
+        ? FirebaseService.instance.currentUser
+        : null;
+    final emailVerified = firebaseUser?.emailVerified ?? true;
     final initial = user.name.trim().isEmpty
         ? '?'
         : user.name.trim()[0].toUpperCase();
@@ -680,12 +731,12 @@ class _SignedInProfile extends StatelessWidget {
                       children: [
                         CircleAvatar(
                           radius: 34,
-                          backgroundColor: Theme.of(context)
-                              .colorScheme
-                              .primary,
-                          foregroundColor: Theme.of(context)
-                              .colorScheme
-                              .onPrimary,
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          foregroundColor: Theme.of(
+                            context,
+                          ).colorScheme.onPrimary,
                           child: Text(
                             initial,
                             style: Theme.of(context).textTheme.headlineMedium,
@@ -698,9 +749,9 @@ class _SignedInProfile extends StatelessWidget {
                             children: [
                               Text(
                                 user.name,
-                                style: Theme.of(context)
-                                    .textTheme
-                                    .headlineMedium,
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.headlineMedium,
                               ),
                               const SizedBox(height: 4),
                               Text(user.email),
@@ -719,6 +770,49 @@ class _SignedInProfile extends StatelessWidget {
                     ),
                   ),
                 ),
+                if (!emailVerified) ...[
+                  const SizedBox(height: 16),
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.mark_email_unread_outlined),
+                      title: const Text('Verify your email address'),
+                      subtitle: const Text(
+                        'Verify your email to keep your account secure.',
+                      ),
+                      trailing: TextButton(
+                        onPressed: controller.authBusy
+                            ? null
+                            : () async {
+                                try {
+                                  await controller
+                                      .resendFirebaseVerificationEmail();
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Verification email sent.',
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                } catch (error) {
+                                  if (context.mounted) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          controller.lastError ??
+                                              error.toString(),
+                                        ),
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
+                        child: const Text('Resend'),
+                      ),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 16),
                 Row(
                   children: [
@@ -732,9 +826,9 @@ class _SignedInProfile extends StatelessWidget {
                     const SizedBox(width: 12),
                     Expanded(
                       child: _StatCard(
-                        icon: Icons.luggage_outlined,
+                        icon: Icons.confirmation_number_outlined,
                         value: '${controller.bookings.length}',
-                        label: 'Trips',
+                        label: 'Bookings',
                       ),
                     ),
                   ],
@@ -773,20 +867,6 @@ class _SignedInProfile extends StatelessWidget {
                     ),
                   ),
                 const SizedBox(height: 22),
-                Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.dns_outlined),
-                    title: const Text('Connected API'),
-                    subtitle: Text(
-                      controller.api.baseUrl.isEmpty
-                          ? 'Offline catalog only'
-                          : controller.api.baseUrl,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                const _ImageCredit(),
-                const SizedBox(height: 16),
                 OutlinedButton.icon(
                   onPressed: controller.logout,
                   icon: const Icon(Icons.logout),
@@ -799,27 +879,6 @@ class _SignedInProfile extends StatelessWidget {
       ],
     );
   }
-}
-
-class _ImageCredit extends StatelessWidget {
-  const _ImageCredit();
-
-  static final _source = Uri.parse(
-    'https://commons.wikimedia.org/wiki/File:Sundarban_Mangrove.jpg',
-  );
-
-  @override
-  Widget build(BuildContext context) => Card(
-    child: ListTile(
-      leading: const Icon(Icons.photo_library_outlined),
-      title: const Text('Image credits'),
-      subtitle: const Text(
-        'Sundarban Mangrove by Shohelrana1979 · CC BY-SA 4.0',
-      ),
-      trailing: const Icon(Icons.open_in_new),
-      onTap: () => launchUrl(_source, mode: LaunchMode.externalApplication),
-    ),
-  );
 }
 
 class _StatCard extends StatelessWidget {
@@ -853,6 +912,8 @@ class _StatCard extends StatelessWidget {
     ),
   );
 }
+
+enum _BookingAction { download, cancel }
 
 class _BookingCard extends StatelessWidget {
   const _BookingCard({required this.controller, required this.booking});
@@ -901,10 +962,38 @@ class _BookingCard extends StatelessWidget {
               ),
             ),
             if (!cancelled)
+              PopupMenuButton<_BookingAction>(
+                tooltip: 'Booking actions',
+                onSelected: (action) {
+                  switch (action) {
+                    case _BookingAction.download:
+                      _downloadConfirmation(context);
+                    case _BookingAction.cancel:
+                      _cancel(context);
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: _BookingAction.download,
+                    child: ListTile(
+                      leading: Icon(Icons.picture_as_pdf_outlined),
+                      title: Text('Download confirmation'),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    value: _BookingAction.cancel,
+                    child: ListTile(
+                      leading: Icon(Icons.event_busy_outlined),
+                      title: Text('Cancel booking'),
+                    ),
+                  ),
+                ],
+              )
+            else
               IconButton(
-                tooltip: 'Cancel booking',
-                onPressed: () => _cancel(context),
-                icon: const Icon(Icons.close),
+                tooltip: 'Download booking confirmation',
+                onPressed: () => _downloadConfirmation(context),
+                icon: const Icon(Icons.picture_as_pdf_outlined),
               ),
           ],
         ),
@@ -936,14 +1025,93 @@ class _BookingCard extends StatelessWidget {
     try {
       await controller.cancelBooking(booking.id);
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('Booking cancelled.')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Booking cancelled.')));
       }
     } on ApiFailure catch (error) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text(error.message)));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.message)));
       }
     }
   }
+
+  Future<void> _downloadConfirmation(BuildContext context) async {
+    final document = pw.Document();
+    document.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        build: (context) => pw.Padding(
+          padding: const pw.EdgeInsets.all(32),
+          child: pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              pw.Text(
+                'FarReach',
+                style: pw.TextStyle(
+                  fontSize: 28,
+                  fontWeight: pw.FontWeight.bold,
+                  color: PdfColors.teal900,
+                ),
+              ),
+              pw.SizedBox(height: 8),
+              pw.Text(
+                'Booking confirmation and travel ticket',
+                style: pw.TextStyle(fontSize: 16),
+              ),
+              pw.Divider(),
+              pw.SizedBox(height: 20),
+              pw.Text(
+                booking.spotName,
+                style: pw.TextStyle(
+                  fontSize: 24,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 16),
+              _pdfRow('Booking ID', '#${booking.id}'),
+              _pdfRow('Travel date', booking.date),
+              _pdfRow('Travelers', '${booking.persons}'),
+              _pdfRow('Total price', 'BDT ${booking.price}'),
+              _pdfRow('Status', booking.status.toUpperCase()),
+              pw.SizedBox(height: 28),
+              pw.Container(
+                padding: const pw.EdgeInsets.all(16),
+                decoration: pw.BoxDecoration(
+                  border: pw.Border.all(color: PdfColors.teal700),
+                  borderRadius: pw.BorderRadius.circular(8),
+                ),
+                child: pw.Text(
+                  'Please keep this ticket with you when travelling. '
+                  'Arrive prepared with your booking ID.',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    await Printing.sharePdf(
+      bytes: await document.save(),
+      filename: 'farreach-booking-${booking.id}.pdf',
+    );
+  }
+
+  pw.Widget _pdfRow(String label, String value) => pw.Padding(
+    padding: const pw.EdgeInsets.only(bottom: 10),
+    child: pw.Row(
+      children: [
+        pw.SizedBox(
+          width: 120,
+          child: pw.Text(
+            label,
+            style: pw.TextStyle(fontWeight: pw.FontWeight.bold),
+          ),
+        ),
+        pw.Expanded(child: pw.Text(value)),
+      ],
+    ),
+  );
 }

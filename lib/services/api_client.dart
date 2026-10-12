@@ -278,6 +278,66 @@ class ApiClient {
     );
   }
 
+  Future<AuthResult> exchangeFirebaseToken(String idToken) async {
+    final payload = await _decode(
+      () => _client.post(
+        _uri('/api/auth/firebase'),
+        headers: _headers,
+        body: jsonEncode({'idToken': idToken}),
+      ),
+    );
+    return _authResult(payload);
+  }
+
+  Future<String> sendChatMessage({
+    required String message,
+    List<Map<String, String>> history = const [],
+  }) async {
+    final payload = await _decode(
+      () => _client.post(
+        _uri('/api/chat'),
+        headers: _headers,
+        body: jsonEncode({'message': message, 'history': history}),
+      ),
+    );
+    final reply = payload['reply']?.toString().trim() ?? '';
+    if (reply.isEmpty) {
+      throw const ApiFailure('The travel assistant did not return a reply.');
+    }
+    return reply;
+  }
+
+  Future<String> planTrip({
+    required int days,
+    required int travelers,
+    required String budget,
+    required String origin,
+    required List<String> interests,
+    required String notes,
+    required List<Map<String, String>> catalog,
+  }) async {
+    final payload = await _decode(
+      () => _client.post(
+        _uri('/api/planner'),
+        headers: _headers,
+        body: jsonEncode({
+          'days': days,
+          'travelers': travelers,
+          'budget': budget,
+          'origin': origin,
+          'interests': interests,
+          'notes': notes,
+          'catalog': catalog,
+        }),
+      ),
+    );
+    final plan = payload['plan']?.toString().trim() ?? '';
+    if (plan.isEmpty) {
+      throw const ApiFailure('The trip planner did not return a plan.');
+    }
+    return plan;
+  }
+
   Future<AppUser> getMe() async {
     final payload = await _decode(
       () => _client.get(_uri('/api/auth/me'), headers: _headers),
