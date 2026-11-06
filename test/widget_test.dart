@@ -28,6 +28,7 @@ void main() {
     expect(find.text('Explore Bangladesh'), findsOneWidget);
     expect(find.text("Cox's Bazar"), findsWidgets);
     expect(find.text('Explore'), findsOneWidget);
+    expect(find.text('Trip planner'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     controller.dispose();

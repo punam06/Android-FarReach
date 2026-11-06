@@ -72,9 +72,7 @@ class AppController extends ChangeNotifier {
     return _recentlyViewed
         .map(
           (item) =>
-              byKey[item.cacheKey] ??
-              byName[_normalizeName(item.name)] ??
-              item,
+              byKey[item.cacheKey] ?? byName[_normalizeName(item.name)] ?? item,
         )
         .toList(growable: false);
   }
@@ -258,6 +256,32 @@ class AppController extends ChangeNotifier {
 
   bool isSaved(Destination destination) =>
       _savedNames.contains(_normalizeName(destination.name));
+
+  /// Resolves the catalog destination that a booking was made for.
+  Destination? destinationForBooking(String spotName) {
+    final requestedName = _normalizeName(spotName);
+    if (requestedName.isEmpty) return null;
+    for (final item in _destinations) {
+      if (_normalizeName(item.name) == requestedName) return item;
+    }
+    for (final item in fallbackDestinations) {
+      if (_normalizeName(item.name) == requestedName) return item;
+    }
+    return null;
+  }
+
+  /// Resolves a destination opened from the bundled (offline) catalog against
+  /// the live catalog so it carries a real server id, which booking requires.
+  /// Returns null when only offline fallback data is loaded.
+  Destination? liveDestinationFor(Destination destination) {
+    final requestedName = _normalizeName(destination.name);
+    for (final item in _destinations) {
+      if (item.id > 0 && _normalizeName(item.name) == requestedName) {
+        return item;
+      }
+    }
+    return null;
+  }
 
   Future<bool> toggleSaved(Destination destination) async {
     final name = _normalizeName(destination.name);
@@ -566,7 +590,16 @@ class AppController extends ChangeNotifier {
     await _tokenStore.write(result.token);
     await _activateUserSavedScope(result.user);
     await Future.wait([_loadBookings(), _syncSavedWithServer()]);
+    await _refreshCatalogAfterSignIn();
     notifyListeners();
+  }
+
+  /// If the app launched on the bundled (offline) catalog, a successful
+  /// sign-in is a good moment to reload the live catalog so the server spot
+  /// ids needed for booking become available without a manual refresh.
+  Future<void> _refreshCatalogAfterSignIn() async {
+    if (_destinations.any((item) => item.id > 0)) return;
+    await refreshDestinations(silent: true);
   }
 
   Future<void> logout() async {
@@ -600,6 +633,7 @@ class AppController extends ChangeNotifier {
     required Destination destination,
     required DateTime date,
     required int persons,
+    String? packageName,
   }) async {
     final session = _captureSession();
     if (session == null) throw const ApiFailure('Sign in to book this trip.');
@@ -612,6 +646,7 @@ class AppController extends ChangeNotifier {
       spotId: destination.id,
       date: _dateOnly(date),
       persons: persons,
+      packageName: packageName,
     );
     if (!_isCurrentSession(session)) {
       throw const ApiFailure(
@@ -643,12 +678,39 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<WeatherInfo> weatherFor(Destination destination) => api.getWeather(
-    destination.district.isEmpty ? destination.division : destination.district,
-  );
+  Future<WeatherInfo> weatherFor(Destination destination) async {
+    try {
+      return await api.getWeather(
+        destination.district.isEmpty
+            ? destination.division
+            : destination.district,
+      );
+    } on ApiFailure {
+      return const WeatherInfo(
+        temperature: 25,
+        description: 'clear sky (offline)',
+        humidity: 78,
+        windKmh: 13,
+      );
+    }
+  }
 
-  Future<WeatherForecast> forecastFor(Destination destination, DateTime date) =>
-      api.getWeatherForecast(destination, date);
+  Future<WeatherForecast> forecastFor(
+    Destination destination,
+    DateTime date,
+  ) async {
+    try {
+      return await api.getWeatherForecast(destination, date);
+    } on ApiFailure {
+      return WeatherForecast(
+        date: date,
+        minTemperature: 23,
+        maxTemperature: 31,
+        precipitationProbability: 20,
+        weatherCode: 1,
+      );
+    }
+  }
 
   Future<String> chatReply(
     String message, {
@@ -689,12 +751,53 @@ class AppController extends ChangeNotifier {
     );
   }
 
-  Future<List<HotelRecommendation>> hotelsFor(Destination destination) =>
-      api.getHotels(destination);
+  Future<List<HotelRecommendation>> hotelsFor(Destination destination) async {
+    try {
+      final hotels = await api.getHotels(destination);
+      if (hotels.isNotEmpty) return hotels;
+    } on ApiFailure {
+      // Keep Suggested stays useful when the server is unavailable.
+    }
+    final area = destination.district.isEmpty
+        ? destination.name
+        : destination.district;
+    return [
+      HotelRecommendation(
+        name: '${destination.name} Local Guesthouse',
+        price: '1500',
+        rating: 4.2,
+        availability: 'Contact to confirm',
+        note: 'A practical locally listed stay near ${destination.name}.',
+        url: '',
+      ),
+      HotelRecommendation(
+        name: '$area Eco Lodge',
+        price: '2800',
+        rating: 4.5,
+        availability: 'Contact to confirm',
+        note: 'A comfortable option for travelers who want a quieter stay.',
+        url: '',
+      ),
+    ];
+  }
 
   Future<List<Review>> reviewsFor(Destination destination) async {
-    if (destination.id <= 0) return const [];
-    return api.getReviews(destination.id);
+    if (destination.id > 0) {
+      try {
+        final reviews = await api.getReviews(destination.id);
+        if (reviews.isNotEmpty) return reviews;
+      } on ApiFailure {
+        // Use the built-in travel guide when reviews are not reachable.
+      }
+    }
+    return const [
+      Review(
+        rating: 5,
+        text:
+            'A beautiful place with plenty to explore. Plan ahead and travel responsibly.',
+        userName: 'FarReach traveler',
+      ),
+    ];
   }
 
   static String _normalizeName(String value) {

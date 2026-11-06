@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../data/destination_history.dart';
+import '../data/local_guides.dart';
 import '../models/destination.dart';
 import '../services/api_client.dart';
 import '../state/app_controller.dart';
@@ -182,10 +184,7 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
                         const SizedBox(height: 26),
                         _Section(
                           title: 'Story of the place',
-                          child: Text(
-                            widget.destination.history,
-                            style: Theme.of(context).textTheme.bodyLarge,
-                          ),
+                          child: _StoryBody(destination: widget.destination),
                         ),
                       ],
                       const SizedBox(height: 26),
@@ -277,9 +276,9 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
                                 label: const Text('Open in Maps'),
                               ),
                               OutlinedButton.icon(
-                                onPressed: _showHotels,
-                                icon: const Icon(Icons.hotel_outlined),
-                                label: const Text('Suggested stays'),
+                                onPressed: _showAvailable,
+                                icon: const Icon(Icons.travel_explore_outlined),
+                                label: const Text('Browse services'),
                               ),
                             ];
                             return stack
@@ -445,41 +444,32 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
     }
   }
 
-  Future<void> _showHotels() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => _HotelsSheet(
-        weather: _weather,
-        onWeatherRetry: () => setState(
-          () => _weather = widget.controller.weatherFor(widget.destination),
+  Future<void> _showGuides() async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => _FeaturePage(
+          title: 'Local guides',
+          child: _GuidesSheet(destination: widget.destination),
         ),
-        future: widget.controller.hotelsFor(widget.destination),
       ),
     );
   }
 
-  Future<void> _showGuides() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => _GuidesSheet(destination: widget.destination),
-    );
-  }
-
   Future<void> _showBudget() async {
-    final result = await showModalBottomSheet<_BudgetResult>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) =>
-          _BudgetSheet(destination: widget.destination, weather: _weather),
+    final result = await Navigator.of(context).push<_BudgetResult>(
+      MaterialPageRoute(
+        builder: (context) => _FeaturePage(
+          title: 'Trip budget',
+          child: _BudgetSheet(
+            destination: widget.destination,
+            weather: _weather,
+          ),
+        ),
+      ),
     );
     if (result == null || !mounted) return;
     final checkIn = result.checkIn;
-    await _showBooking(
+    await _showAvailable(
       initialDate: checkIn != null && checkIn.isAfter(DateTime.now())
           ? checkIn
           : null,
@@ -487,23 +477,42 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
     );
   }
 
-  Future<void> _showAvailable() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => _AvailableSheet(destination: widget.destination),
+  Future<void> _showAvailable({
+    DateTime? initialDate,
+    int? initialPersons,
+  }) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => _FeaturePage(
+          title: 'Available services',
+          child: _AvailableSheet(
+            destination: widget.destination,
+            initialDate: initialDate,
+            initialPersons: initialPersons,
+            hotelsFuture: widget.controller.hotelsFor(widget.destination),
+            onConfirmBooking:
+                ({DateTime? date, int? persons, String? packageName}) =>
+                    _showBooking(
+                      initialDate: date ?? initialDate,
+                      initialPersons: persons ?? initialPersons,
+                      initialPackageName: packageName,
+                    ),
+          ),
+        ),
+      ),
     );
   }
 
   Future<void> _showReviews() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => _ReviewsSheet(
-        future: widget.controller.reviewsFor(widget.destination),
-        destinationName: widget.destination.name,
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => _FeaturePage(
+          title: 'Traveler reviews',
+          child: _ReviewsSheet(
+            future: widget.controller.reviewsFor(widget.destination),
+            destinationName: widget.destination.name,
+          ),
+        ),
       ),
     );
   }
@@ -511,24 +520,54 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
   Future<void> _showBooking({
     DateTime? initialDate,
     int? initialPersons,
+    String? initialPackageName,
   }) async {
-    if (widget.destination.id <= 0) {
-      await showDialog<void>(
+    var destination = widget.destination;
+    if (destination.id <= 0) {
+      destination =
+          widget.controller.liveDestinationFor(widget.destination) ??
+          widget.destination;
+    }
+    if (destination.id <= 0) {
+      // The bundled catalog has no server id. Try to fetch the live catalog
+      // here so booking works as soon as the FarReach server is reachable.
+      await widget.controller.refreshDestinations(silent: true);
+      if (!mounted) return;
+      destination =
+          widget.controller.liveDestinationFor(widget.destination) ??
+          widget.destination;
+    }
+    if (destination.id <= 0) {
+      final retry = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
           icon: const Icon(Icons.cloud_off_outlined),
-          title: const Text('Connect before booking'),
+          title: const Text('Server unreachable'),
           content: const Text(
-            'This is an offline guide. Refresh the live destination catalog before confirming a booking.',
+            'Booking needs the live catalog from the FarReach server, which '
+            'the app could not reach. Check that your device can reach the '
+            'server, then try again.',
           ),
           actions: [
-            FilledButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Got it'),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Not now'),
+            ),
+            FilledButton.icon(
+              onPressed: () => Navigator.pop(context, true),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try again'),
             ),
           ],
         ),
       );
+      if (retry == true && mounted) {
+        await _showBooking(
+          initialDate: initialDate,
+          initialPersons: initialPersons,
+          initialPackageName: initialPackageName,
+        );
+      }
       return;
     }
     if (!widget.controller.isAuthenticated) {
@@ -559,15 +598,18 @@ class _DestinationDetailScreenState extends State<DestinationDetailScreen> {
       }
       return;
     }
-    final booking = await showModalBottomSheet<Booking>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => _BookingSheet(
-        controller: widget.controller,
-        destination: widget.destination,
-        initialDate: initialDate,
-        initialPersons: initialPersons,
+    final booking = await Navigator.of(context).push<Booking>(
+      MaterialPageRoute(
+        builder: (context) => _FeaturePage(
+          title: 'Confirm booking',
+          child: _BookingSheet(
+            controller: widget.controller,
+            destination: destination,
+            initialDate: initialDate,
+            initialPersons: initialPersons,
+            initialPackageName: initialPackageName,
+          ),
+        ),
       ),
     );
     if (booking != null && mounted) {
@@ -651,6 +693,100 @@ class _Section extends StatelessWidget {
       child,
     ],
   );
+}
+
+class _StoryBody extends StatelessWidget {
+  const _StoryBody({required this.destination});
+
+  final Destination destination;
+
+  @override
+  Widget build(BuildContext context) {
+    final paragraphs = storyParagraphsFor(destination);
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 0,
+      color: theme.colorScheme.surfaceContainerLowest,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: BorderSide(color: theme.colorScheme.outlineVariant),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.auto_stories_outlined,
+                  size: 18,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  'A three-part story',
+                  style: theme.textTheme.labelLarge?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            for (var index = 0; index < paragraphs.length; index++) ...[
+              if (index > 0) const SizedBox(height: 18),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Container(
+                      width: 24,
+                      height: 24,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: index == 0
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.primaryContainer,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(
+                        '${index + 1}',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: index == 0
+                              ? theme.colorScheme.onPrimary
+                              : theme.colorScheme.onPrimaryContainer,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      paragraphs[index],
+                      style: theme.textTheme.bodyLarge?.copyWith(
+                        height: 1.68,
+                        fontSize: index == 0 ? 16.5 : 15.5,
+                        fontWeight: index == 0
+                            ? FontWeight.w500
+                            : FontWeight.w400,
+                        color: index == 0
+                            ? theme.colorScheme.onSurface
+                            : theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _WeatherCard extends StatelessWidget {
@@ -807,89 +943,6 @@ class _TripWeatherAdvice extends StatelessWidget {
   );
 }
 
-class _HotelsSheet extends StatelessWidget {
-  const _HotelsSheet({
-    required this.future,
-    required this.weather,
-    required this.onWeatherRetry,
-  });
-
-  final Future<List<HotelRecommendation>> future;
-  final Future<WeatherInfo> weather;
-  final VoidCallback onWeatherRetry;
-
-  @override
-  Widget build(BuildContext context) => SafeArea(
-    child: Padding(
-      padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-      child: SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.72,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Suggested stays',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Suggestions and availability are estimates; verify before paying.',
-            ),
-            const SizedBox(height: 16),
-            _WeatherCard(weather: weather, onRetry: onWeatherRetry),
-            const SizedBox(height: 16),
-            Expanded(
-              child: FutureBuilder<List<HotelRecommendation>>(
-                future: future,
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const Center(child: CircularProgressIndicator());
-                  }
-                  if (snapshot.hasError) {
-                    return const Center(
-                      child: Text('Stays are unavailable right now.'),
-                    );
-                  }
-                  final hotels = snapshot.data ?? const [];
-                  if (hotels.isEmpty) {
-                    return const Center(child: Text('No suggestions found.'));
-                  }
-                  return ListView.separated(
-                    itemCount: hotels.length,
-                    separatorBuilder: (_, _) => const Divider(),
-                    itemBuilder: (context, index) {
-                      final hotel = hotels[index];
-                      final hotelUri = _safeWebUri(hotel.url);
-                      return ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        leading: CircleAvatar(
-                          child: Text(hotel.rating.toStringAsFixed(1)),
-                        ),
-                        title: Text(hotel.name),
-                        subtitle: Text(
-                          '৳${hotel.price} / night · ${hotel.availability}\n${hotel.note}',
-                        ),
-                        isThreeLine: true,
-                        trailing: hotelUri == null
-                            ? null
-                            : IconButton(
-                                tooltip: 'Open hotel website',
-                                onPressed: () => _openWebUri(context, hotelUri),
-                                icon: const Icon(Icons.open_in_new),
-                              ),
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
 class _QuickAction extends StatelessWidget {
   const _QuickAction({
     required this.icon,
@@ -921,6 +974,19 @@ class _QuickAction extends StatelessWidget {
   );
 }
 
+class _FeaturePage extends StatelessWidget {
+  const _FeaturePage({required this.title, required this.child});
+
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: Text(title), leading: const BackButton()),
+    body: child,
+  );
+}
+
 class _GuidesSheet extends StatelessWidget {
   const _GuidesSheet({required this.destination});
 
@@ -928,7 +994,7 @@ class _GuidesSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final guides = _guidesFor(destination);
+    final guides = localGuidesFor(destination);
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
@@ -1232,13 +1298,13 @@ class _BudgetSheetState extends State<_BudgetSheet> {
                     context,
                     _BudgetResult(checkIn: _checkIn, persons: _persons),
                   ),
-                  icon: const Icon(Icons.event_available_outlined),
-                  label: const Text('Book this trip'),
+                  icon: const Icon(Icons.room_service_outlined),
+                  label: const Text('View available services'),
                 ),
               ),
               const SizedBox(height: 4),
               Text(
-                'Continue to booking with this plan and estimate.',
+                'Browse hotels, transports, guides & services for this plan.',
                 style: Theme.of(context).textTheme.bodySmall,
                 textAlign: TextAlign.center,
               ),
@@ -1422,83 +1488,811 @@ class _EstimateRow extends StatelessWidget {
 }
 
 class _AvailableSheet extends StatelessWidget {
-  const _AvailableSheet({required this.destination});
+  const _AvailableSheet({
+    required this.destination,
+    this.initialDate,
+    this.initialPersons,
+    required this.hotelsFuture,
+    required this.onConfirmBooking,
+  });
+
+  final Destination destination;
+  final DateTime? initialDate;
+  final int? initialPersons;
+  final Future<List<HotelRecommendation>> hotelsFuture;
+  final void Function({DateTime? date, int? persons, String? packageName})
+  onConfirmBooking;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: DefaultTabController(
+        length: 4,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          body: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 6),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Available services',
+                      style: Theme.of(context).textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Select and book your preferred services online via web links, then confirm your trip with FarReach.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    if (initialDate != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primaryContainer,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.event_outlined,
+                              size: 16,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onPrimaryContainer,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Planned travel: ${_shortDate(initialDate!)} · ${initialPersons ?? 1} traveler(s)',
+                              style: Theme.of(context).textTheme.labelMedium
+                                  ?.copyWith(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onPrimaryContainer,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const TabBar(
+                isScrollable: true,
+                tabs: [
+                  Tab(icon: Icon(Icons.hotel_outlined), text: 'Hotels'),
+                  Tab(
+                    icon: Icon(Icons.directions_bus_outlined),
+                    text: 'Travel Transports',
+                  ),
+                  Tab(icon: Icon(Icons.person_pin_outlined), text: 'Guiders'),
+                  Tab(icon: Icon(Icons.category_outlined), text: 'Others'),
+                ],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    _AvailableHotelsTab(
+                      destination: destination,
+                      future: hotelsFuture,
+                    ),
+                    _AvailableTransportsTab(destination: destination),
+                    _AvailableGuidersTab(destination: destination),
+                    _AvailableOthersTab(
+                      destination: destination,
+                      onBookPackage: (pkg) {
+                        Navigator.pop(context);
+                        onConfirmBooking(
+                          date: initialDate,
+                          persons: initialPersons,
+                          packageName: pkg,
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          bottomNavigationBar: Container(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.surface,
+              border: Border(
+                top: BorderSide(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
+              ),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Ready to secure your plan? Confirm in FarReach:',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      onConfirmBooking(
+                        date: initialDate,
+                        persons: initialPersons,
+                      );
+                    },
+                    icon: const Icon(Icons.verified_outlined),
+                    label: const Text('Confirm Booking via FarReach'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AvailableHotelsTab extends StatelessWidget {
+  const _AvailableHotelsTab({required this.destination, required this.future});
+
+  final Destination destination;
+  final Future<List<HotelRecommendation>> future;
+
+  @override
+  Widget build(BuildContext context) {
+    final searchUri = Uri.parse(
+      'https://www.booking.com/searchresults.html?ss=${Uri.encodeComponent('${destination.name} ${destination.district}')}',
+    );
+    final gozayaanUri = Uri.parse('https://www.gozayaan.com/hotel');
+    final agodaUri = Uri.parse(
+      'https://www.agoda.com/search?text=${Uri.encodeComponent(destination.name)}',
+    );
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+      children: [
+        Card(
+          color: Theme.of(
+            context,
+          ).colorScheme.secondaryContainer.withValues(alpha: 0.5),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.language_outlined,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Book Online via Hotel Portals',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Search real-time room availability and book securely across leading platforms:',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('Booking.com'),
+                      onPressed: () => _openWebUri(context, searchUri),
+                    ),
+                    ActionChip(
+                      avatar: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('GoZayaan Hotels'),
+                      onPressed: () => _openWebUri(context, gozayaanUri),
+                    ),
+                    ActionChip(
+                      avatar: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('Agoda'),
+                      onPressed: () => _openWebUri(context, agodaUri),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          'Recommended stays near ${destination.name}',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        FutureBuilder<List<HotelRecommendation>>(
+          future: future,
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            final hotels = snapshot.data ?? const [];
+            if (hotels.isEmpty) {
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    children: [
+                      const Text(
+                        'No specific hotel listings returned right now. You can check available options directly on hotel booking sites:',
+                      ),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: () => _openWebUri(context, searchUri),
+                        icon: const Icon(Icons.open_in_new),
+                        label: Text('Search hotels in ${destination.name}'),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+            return Column(
+              children: hotels.map((hotel) {
+                final hotelUri =
+                    _safeWebUri(hotel.url) ??
+                    Uri.parse(
+                      'https://www.google.com/search?q=${Uri.encodeComponent('${hotel.name} ${destination.name}')}',
+                    );
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            CircleAvatar(
+                              radius: 20,
+                              backgroundColor: Theme.of(
+                                context,
+                              ).colorScheme.primaryContainer,
+                              child: Text(
+                                hotel.rating.toStringAsFixed(1),
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onPrimaryContainer,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    hotel.name,
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    '৳${hotel.price} / night · ${hotel.availability}',
+                                    style: TextStyle(
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (hotel.note.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            hotel.note,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: () => _openWebUri(context, hotelUri),
+                            icon: const Icon(Icons.open_in_new, size: 16),
+                            label: const Text('Book / View hotel online'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _AvailableTransportsTab extends StatelessWidget {
+  const _AvailableTransportsTab({required this.destination});
 
   final Destination destination;
 
   @override
-  Widget build(BuildContext context) => SafeArea(
-    child: SizedBox(
-      height: MediaQuery.sizeOf(context).height * .78,
-      child: DefaultTabController(
-        length: 5,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),
-              child: Text(
-                'Available near ${destination.name}',
-                style: Theme.of(context).textTheme.headlineMedium,
-              ),
-            ),
-            const TabBar(
-              isScrollable: true,
-              tabs: [
-                Tab(icon: Icon(Icons.hotel_outlined), text: 'Hotels'),
-                Tab(
-                  icon: Icon(Icons.directions_car_outlined),
-                  text: 'Vehicles',
-                ),
-                Tab(icon: Icon(Icons.restaurant_outlined), text: 'Restaurants'),
-                Tab(icon: Icon(Icons.beach_access_outlined), text: 'Resorts'),
-                Tab(
-                  icon: Icon(Icons.local_activity_outlined),
-                  text: 'Activities',
+  Widget build(BuildContext context) {
+    final transports = [
+      _TransportOption(
+        title: 'Bangladesh Railway e-Ticketing',
+        subtitle: 'Intercity AC, chair & sleeper train tickets nationwide',
+        icon: Icons.train_outlined,
+        url: 'https://eticket.railway.gov.bd',
+        tag: 'Train',
+      ),
+      _TransportOption(
+        title: 'Shohoz Bus Booking',
+        subtitle: 'AC & non-AC coach tickets (Green Line, Hanif, Shyamoli)',
+        icon: Icons.directions_bus_outlined,
+        url: 'https://www.shohoz.com/bus-tickets',
+        tag: 'Bus',
+      ),
+      _TransportOption(
+        title: 'GoZayaan Domestic Flights',
+        subtitle: 'Compare & book domestic air tickets to nearest airport',
+        icon: Icons.flight_outlined,
+        url: 'https://www.gozayaan.com/flight',
+        tag: 'Air',
+      ),
+      _TransportOption(
+        title: 'Shohoz Launch & Ferry',
+        subtitle: 'River passenger vessels, cabin & deck ticket bookings',
+        icon: Icons.directions_boat_outlined,
+        url: 'https://www.shohoz.com/launch',
+        tag: 'River',
+      ),
+      _TransportOption(
+        title: 'Private Car & Microbus Hire',
+        subtitle: 'Dedicated sedans and group minivans with drivers',
+        icon: Icons.directions_car_outlined,
+        url:
+            'https://www.google.com/search?q=${Uri.encodeComponent('rent a car ${destination.name} ${destination.district}')}',
+        tag: 'Private',
+      ),
+      _TransportOption(
+        title: 'Local Jeep / Chander Gari',
+        subtitle: '4x4 tourist jeeps for hill trekking and sightseeing',
+        icon: Icons.terrain_outlined,
+        url:
+            'https://www.google.com/search?q=${Uri.encodeComponent('tourist jeep booking ${destination.name}')}',
+        tag: 'Local',
+      ),
+    ];
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+      children: [
+        Card(
+          color: Theme.of(
+            context,
+          ).colorScheme.primaryContainer.withValues(alpha: 0.4),
+          child: const Padding(
+            padding: EdgeInsets.all(12),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, size: 20),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Book travel tickets directly on official web channels, then return to FarReach to finalize your trip schedule.',
+                    style: TextStyle(fontSize: 13),
+                  ),
                 ),
               ],
             ),
-            Expanded(
-              child: TabBarView(
+          ),
+        ),
+        const SizedBox(height: 12),
+        ...transports.map((t) {
+          final uri = Uri.parse(t.url);
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Theme.of(
+                  context,
+                ).colorScheme.surfaceContainerHighest,
+                child: Icon(
+                  t.icon,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+              ),
+              title: Text(
+                t.title,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(t.subtitle),
+              ),
+              trailing: IconButton.filledTonal(
+                tooltip: 'Book / View website',
+                icon: const Icon(Icons.open_in_new, size: 18),
+                onPressed: () => _openWebUri(context, uri),
+              ),
+              isThreeLine: true,
+            ),
+          );
+        }),
+      ],
+    );
+  }
+}
+
+class _TransportOption {
+  const _TransportOption({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.url,
+    required this.tag,
+  });
+
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final String url;
+  final String tag;
+}
+
+class _AvailableGuidersTab extends StatelessWidget {
+  const _AvailableGuidersTab({required this.destination});
+
+  final Destination destination;
+
+  @override
+  Widget build(BuildContext context) {
+    final guides = localGuidesFor(destination);
+    final bpcUri = Uri.parse('https://parjatan.gov.bd/');
+    final guideDirectoryUri = Uri.parse(
+      'https://www.google.com/search?q=${Uri.encodeComponent('tourist guides in ${destination.name} Bangladesh')}',
+    );
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+      children: [
+        Card(
+          color: Theme.of(
+            context,
+          ).colorScheme.tertiaryContainer.withValues(alpha: 0.4),
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Verified National Guide Directories',
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Access official certified tourist guides registered with government & tourism associations.',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    ActionChip(
+                      avatar: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('BPC Official Portal'),
+                      onPressed: () => _openWebUri(context, bpcUri),
+                    ),
+                    ActionChip(
+                      avatar: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('Search Local Guides Online'),
+                      onPressed: () => _openWebUri(context, guideDirectoryUri),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          'Featured local guides around ${destination.name}',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        ...guides.map((guide) {
+          final contactUri = Uri.parse(
+            'https://www.google.com/search?q=${Uri.encodeComponent('${guide.name} tour guide ${guide.base}')}',
+          );
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _AvailableList(items: _availableHotels),
-                  _AvailableList(items: _availableVehicles),
-                  _AvailableList(items: _availableRestaurants),
-                  _AvailableList(items: _availableResorts),
-                  _AvailableList(items: _availableActivities),
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        child: Text(
+                          guide.initials,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              guide.name,
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            Text(
+                              '${guide.role} · based in ${guide.base}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '✉️ ${guide.email}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '📞 ${guide.phone}',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () => _openWebUri(context, contactUri),
+                      icon: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('Connect / View guide profile'),
+                    ),
+                  ),
                 ],
               ),
             ),
-          ],
-        ),
-      ),
-    ),
-  );
+          );
+        }),
+      ],
+    );
+  }
 }
 
-class _AvailableList extends StatelessWidget {
-  const _AvailableList({required this.items});
+class _AvailableOthersTab extends StatelessWidget {
+  const _AvailableOthersTab({
+    required this.destination,
+    required this.onBookPackage,
+  });
 
-  final List<String> items;
+  final Destination destination;
+  final ValueChanged<String> onBookPackage;
 
   @override
-  Widget build(BuildContext context) => ListView.separated(
-    padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
-    itemCount: items.length,
-    separatorBuilder: (_, _) => const SizedBox(height: 8),
-    itemBuilder: (context, index) => Card(
-      child: ListTile(
-        leading: Icon(
-          Icons.check_circle_outline,
-          color: Theme.of(context).colorScheme.primary,
+  Widget build(BuildContext context) {
+    final foodUri = Uri.parse(
+      'https://www.google.com/search?q=${Uri.encodeComponent('best restaurants and street food in ${destination.name}')}',
+    );
+    final activityUri = Uri.parse(
+      'https://www.google.com/search?q=${Uri.encodeComponent('things to do sightseeing activities in ${destination.name}')}',
+    );
+    final emergencyUri = Uri.parse(
+      'https://www.google.com/search?q=${Uri.encodeComponent('hospitals emergency medical services near ${destination.name}')}',
+    );
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
+      children: [
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.restaurant_outlined,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Local Dining & Cuisine',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Explore traditional delicacies, authentic food stalls and popular restaurants at ${destination.name}.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => _openWebUri(context, foodUri),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('Find restaurants online'),
+                ),
+              ],
+            ),
+          ),
         ),
-        title: Text(items[index]),
-        subtitle: const Text(
-          'Available to arrange, subject to date and capacity.',
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.local_activity_outlined,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Activities & Sightseeing',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Boat tours, trekking permits, scuba diving and cultural heritage activities.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => _openWebUri(context, activityUri),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('Explore activities online'),
+                ),
+              ],
+            ),
+          ),
         ),
-      ),
-    ),
-  );
+        const SizedBox(height: 12),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.medical_services_outlined,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Nearby Medical & Emergency',
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Hospital directories, pharmacies and emergency medical facilities.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => _openWebUri(context, emergencyUri),
+                  icon: const Icon(Icons.open_in_new, size: 16),
+                  label: const Text('Search medical help online'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          'FarReach Curated Tour Packages',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        ..._specialPackages.map(
+          (package) => Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    package.name,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${package.duration} · ৳${_money(package.pricePerPerson)} / person',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    package.includes,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.tonalIcon(
+                      onPressed: () => onBookPackage(package.name),
+                      icon: const Icon(Icons.shopping_bag_outlined, size: 18),
+                      label: const Text('Select this package for FarReach'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 const _transportLabels = {
@@ -1561,48 +2355,54 @@ const _guideLabels = {
   'translator': 'Translator / language support',
   'private_vip': 'Private VIP guide',
 };
-const _availableHotels = [
-  'Economy hotel',
-  'Guesthouse',
-  'Homestay / cottage',
-  '3-star hotel',
-  '5-star hotel',
-  'Government rest house',
+
+const _specialPackages = [
+  _SpecialPackage(
+    name: 'Weekend Explorer',
+    duration: '2 days · 1 night',
+    pricePerPerson: 4800,
+    includes: 'Transport, standard hotel, guide, breakfast, local activities',
+  ),
+  _SpecialPackage(
+    name: 'Family Comfort Package',
+    duration: '3 days · 2 nights',
+    pricePerPerson: 8900,
+    includes: 'AC transport, family hotel, meals, guided highlights',
+  ),
+  _SpecialPackage(
+    name: 'Premium Relax Package',
+    duration: '3 days · 2 nights',
+    pricePerPerson: 13500,
+    includes: 'Premium stay, private transfer, dedicated guide, activities',
+  ),
+  _SpecialPackage(
+    name: 'Eco Adventure Package',
+    duration: '4 days · 3 nights',
+    pricePerPerson: 11200,
+    includes: 'Eco lodge, nature guide, trekking/boat activities, meals',
+  ),
 ];
-const _availableVehicles = [
-  'Non-AC bus',
-  'AC coach',
-  'Train chair / cabin',
-  'Launch deck / cabin',
-  'CNG / auto-rickshaw',
-  'Microbus / private car',
-  'Hill Jeep / 4x4',
+const _bookablePackages = [
+  'Standard package',
+  'Weekend Explorer',
+  'Family Comfort Package',
+  'Premium Relax Package',
+  'Eco Adventure Package',
 ];
-const _availableRestaurants = [
-  'Local restaurant',
-  'Family restaurant',
-  'Seafood restaurant',
-  'Hill cuisine',
-  'Tea garden dining',
-  'Hotel buffet',
-  'Fine dining',
-];
-const _availableResorts = [
-  'Beach resort',
-  'Mountain resort',
-  'Eco resort',
-  'Forest lodge',
-  'Premium resort villa',
-  'Government motel',
-];
-const _availableActivities = [
-  'Local sightseeing',
-  'Boat ride',
-  'Beach activities',
-  'Hill trekking',
-  'Forest / eco tour',
-  'Cultural and heritage tour',
-];
+
+class _SpecialPackage {
+  const _SpecialPackage({
+    required this.name,
+    required this.duration,
+    required this.pricePerPerson,
+    required this.includes,
+  });
+
+  final String name;
+  final String duration;
+  final int pricePerPerson;
+  final String includes;
+}
 
 class _ReviewsSheet extends StatelessWidget {
   const _ReviewsSheet({required this.future, required this.destinationName});
@@ -1714,12 +2514,14 @@ class _BookingSheet extends StatefulWidget {
     required this.destination,
     this.initialDate,
     this.initialPersons,
+    this.initialPackageName,
   });
 
   final AppController controller;
   final Destination destination;
   final DateTime? initialDate;
   final int? initialPersons;
+  final String? initialPackageName;
 
   @override
   State<_BookingSheet> createState() => _BookingSheetState();
@@ -1728,6 +2530,7 @@ class _BookingSheet extends StatefulWidget {
 class _BookingSheetState extends State<_BookingSheet> {
   DateTime? _date;
   int _persons = 1;
+  String _packageName = 'Standard package';
   bool _submitting = false;
   String? _error;
 
@@ -1736,6 +2539,10 @@ class _BookingSheetState extends State<_BookingSheet> {
     super.initState();
     _date = widget.initialDate;
     _persons = (widget.initialPersons ?? 1).clamp(1, 20);
+    final initialPackage = widget.initialPackageName?.trim();
+    if (initialPackage != null && initialPackage.isNotEmpty) {
+      _packageName = initialPackage;
+    }
   }
 
   int get _estimate {
@@ -1744,7 +2551,15 @@ class _BookingSheetState extends State<_BookingSheet> {
       'mid' => 1250,
       _ => 800,
     };
-    return rate * _persons;
+    final packageMultiplier = switch (_packageName) {
+      'Standard package' => 1.0,
+      'Weekend Explorer' => 1.15,
+      'Family Comfort Package' => 1.35,
+      'Premium Relax Package' => 1.8,
+      'Eco Adventure Package' => 1.5,
+      _ => 1.2,
+    };
+    return (rate * _persons * packageMultiplier).round();
   }
 
   @override
@@ -1775,6 +2590,25 @@ class _BookingSheetState extends State<_BookingSheet> {
                   ? 'Choose travel date'
                   : '${_date!.day}/${_date!.month}/${_date!.year}',
             ),
+          ),
+          const SizedBox(height: 14),
+          DropdownButtonFormField<String>(
+            initialValue: _packageName,
+            decoration: const InputDecoration(
+              labelText: 'Package',
+              border: OutlineInputBorder(),
+            ),
+            items: _bookablePackages
+                .map(
+                  (item) => DropdownMenuItem<String>(
+                    value: item,
+                    child: Text(item, overflow: TextOverflow.ellipsis),
+                  ),
+                )
+                .toList(),
+            onChanged: (value) {
+              if (value != null) setState(() => _packageName = value);
+            },
           ),
           const SizedBox(height: 14),
           Row(
@@ -1809,7 +2643,10 @@ class _BookingSheetState extends State<_BookingSheet> {
             child: ListTile(
               leading: const Icon(Icons.receipt_long_outlined),
               title: const Text('Estimated package total'),
-              subtitle: const Text('Final price is calculated by the server.'),
+              subtitle: Text(
+                'Package: $_packageName\nFinal price is calculated by the server.',
+              ),
+              isThreeLine: true,
               trailing: Text(
                 '৳$_estimate',
                 style: Theme.of(context).textTheme.titleLarge,
@@ -1885,6 +2722,7 @@ class _BookingSheetState extends State<_BookingSheet> {
         destination: widget.destination,
         date: _date!,
         persons: _persons,
+        packageName: _packageName,
       );
       if (mounted) Navigator.pop(context, booking);
     } on ApiFailure catch (error) {
@@ -1894,112 +2732,6 @@ class _BookingSheetState extends State<_BookingSheet> {
     }
   }
 }
-
-class _LocalGuide {
-  const _LocalGuide({
-    required this.name,
-    required this.initials,
-    required this.role,
-    required this.email,
-    required this.phone,
-    required this.base,
-  });
-
-  final String name;
-  final String initials;
-  final String role;
-  final String email;
-  final String phone;
-  final String base;
-}
-
-int _seedFor(Destination destination) {
-  var hash = 0;
-  for (final code in destination.name.runes) {
-    hash = (hash * 31 + code) & 0x7fffffff;
-  }
-  return hash ^ (destination.id > 0 ? destination.id : 7);
-}
-
-int _next(int seed, int min, int max) {
-  final value = (seed * 2654435761) & 0x7fffffff;
-  return min + (value % (max - min + 1));
-}
-
-List<_LocalGuide> _guidesFor(Destination destination) {
-  const firstNames = [
-    'Arif',
-    'Nusrat',
-    'Rafiq',
-    'Maya',
-    'Tasnim',
-    'Sujon',
-    'Jahan',
-    'Rumana',
-    'Faruk',
-    'Lima',
-  ];
-  const roles = [
-    'Local Guide',
-    'Beach Guide',
-    'Nature Guide',
-    'Cultural Guide',
-    'History Guide',
-    'Hills Guide',
-  ];
-  const domains = [
-    'example.com',
-    'travelsbd.com',
-    'guidehub.com',
-    'tourmail.com',
-  ];
-  const bases = [
-    "Cox's Bazar",
-    'Dhaka',
-    'Sylhet',
-    'Bandarban',
-    'Rangamati',
-    'Khulna',
-  ];
-
-  var seed = _seedFor(destination);
-  final count = 2 + (_next(seed, 0, 1));
-  final list = <_LocalGuide>[];
-  for (var i = 0; i < count; i++) {
-    seed++;
-    final fn = firstNames[_next(seed, 0, firstNames.length - 1)];
-    final ln = firstNames[_next(seed + 3, 0, firstNames.length - 1)];
-    final base = destinationsWithBases.contains(destination.district)
-        ? destination.district
-        : bases[_next(seed + 5, 0, bases.length - 1)];
-    final role = roles[_next(seed + 7, 0, roles.length - 1)];
-    final domain = domains[_next(seed + 9, 0, domains.length - 1)];
-    final phone = '+88 ${_next(seed + 11, 10000000, 99999999)}';
-    list.add(
-      _LocalGuide(
-        name: '$fn $ln',
-        initials: '${fn[0]}${ln[0]}',
-        role: role,
-        email: '${fn.toLowerCase()}.${ln.toLowerCase()}@$domain',
-        phone: phone,
-        base: base,
-      ),
-    );
-  }
-  return list;
-}
-
-const destinationsWithBases = [
-  "Cox's Bazar",
-  'Sylhet',
-  'Bandarban',
-  'Rangamati',
-  'Khulna',
-  'Moulvibazar',
-  'Patuakhali',
-  'Chittagong',
-  'Dhaka',
-];
 
 String _capitalize(String value) => value.isEmpty
     ? value

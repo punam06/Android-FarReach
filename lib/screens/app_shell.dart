@@ -20,10 +20,7 @@ class _AppShellState extends State<AppShell> {
   int _index = 0;
 
   late final _pages = <Widget>[
-    ExploreScreen(
-      controller: widget.controller,
-      onGoToProfile: _goToProfile,
-    ),
+    ExploreScreen(controller: widget.controller, onGoToProfile: _goToProfile),
     MapScreen(controller: widget.controller, onGoToProfile: _goToProfile),
     SavedScreen(controller: widget.controller, onGoToProfile: _goToProfile),
     ProfileScreen(controller: widget.controller),
@@ -119,16 +116,21 @@ class _AppShellState extends State<AppShell> {
   );
 
   Future<void> _openSupport() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => SupportChatSheet(
-        controller: widget.controller,
-        onNavigate: (index) {
-          setState(() => _index = index);
-          Navigator.pop(context);
-        },
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          appBar: AppBar(
+            title: const Text('FarReach guide'),
+            leading: const BackButton(),
+          ),
+          body: SupportChatSheet(
+            controller: widget.controller,
+            onNavigate: (index) {
+              setState(() => _index = index);
+              Navigator.pop(context);
+            },
+          ),
+        ),
       ),
     );
   }
@@ -167,7 +169,6 @@ class _BrandMark extends StatelessWidget {
       ],
     );
   }
-
 }
 
 class _SupportButton extends StatelessWidget {

@@ -38,7 +38,10 @@ class ApiClient {
       _client = client ?? http.Client();
 
   static const configuredBaseUrl = String.fromEnvironment('API_BASE_URL');
-  static const _debugBaseUrl = 'http://10.0.2.2:3000';
+  static String get _debugBaseUrl =>
+      defaultTargetPlatform == TargetPlatform.android
+      ? 'http://10.0.2.2:3000'
+      : 'http://127.0.0.1:3000';
 
   final String baseUrl;
   final http.Client _client;
@@ -143,7 +146,8 @@ class ApiClient {
     final uri = Uri.https('api.open-meteo.com', '/v1/forecast', {
       'latitude': '${destination.latitude}',
       'longitude': '${destination.longitude}',
-      'daily': 'temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code',
+      'daily':
+          'temperature_2m_max,temperature_2m_min,precipitation_probability_max,weather_code',
       'timezone': 'auto',
       'start_date': day,
       'end_date': day,
@@ -388,6 +392,7 @@ class ApiClient {
     required int spotId,
     required String date,
     required int persons,
+    String? packageName,
   }) async {
     final payload = await _decode(
       () => _client.post(
@@ -397,6 +402,8 @@ class ApiClient {
           'spot_id': spotId,
           'booking_date': date,
           'persons': persons,
+          if (packageName != null && packageName.trim().isNotEmpty)
+            'package_name': packageName.trim(),
         }),
       ),
     );

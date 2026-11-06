@@ -71,14 +71,15 @@ class _ExploreScreenState extends State<ExploreScreen> {
               scrolledUnderElevation: 0,
               title: const Text('FarReach'),
               actions: [
-                IconButton(
-                  tooltip: 'AI trip planner',
+                TextButton.icon(
                   onPressed: () => TripPlannerSheet.show(
                     context,
                     controller: widget.controller,
                     onOpenDestination: _open,
                   ),
+                  style: TextButton.styleFrom(foregroundColor: Colors.white),
                   icon: const Icon(Icons.auto_awesome),
+                  label: const Text('Trip planner'),
                 ),
                 IconButton(
                   tooltip: 'Refresh destinations',
@@ -125,7 +126,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
                         alignment: Alignment.bottomLeft,
                         child: Semantics(
                           header: true,
-                          label: 'Find your next Bangladesh story. Local places, practical planning, memorable journeys.',
+                          label:
+                              'Find your next Bangladesh story. Local places, practical planning, memorable journeys.',
                           excludeSemantics: true,
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
@@ -286,7 +288,8 @@ class _ExploreScreenState extends State<ExploreScreen> {
                   ],
                 ),
               ),
-            ),            if (filtered.isEmpty)
+            ),
+            if (filtered.isEmpty)
               SliverFillRemaining(
                 hasScrollBody: false,
                 child: _EmptySearch(onClear: _clearFilters),

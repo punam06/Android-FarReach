@@ -172,4 +172,87 @@ void main() {
     );
     controller.dispose();
   });
+
+  test(
+    'weather and suggested stays remain available when the API is offline',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final preferences = await SharedPreferences.getInstance();
+      final controller = AppController(
+        api: ApiClient(
+          baseUrl: 'http://example.test',
+          client: MockClient((_) async => http.Response('offline', 503)),
+        ),
+        preferences: preferences,
+        tokenStore: MemoryTokenStore(),
+      );
+
+      final destination = controller.destinations.first;
+      final weather = await controller.weatherFor(destination);
+      final stays = await controller.hotelsFor(destination);
+
+      expect(weather.description, contains('offline'));
+      expect(stays, hasLength(2));
+      expect(stays.first.name, contains(destination.name));
+      controller.dispose();
+    },
+  );
+
+  test(
+    'signing in pulls the live catalog so offline guide spots get real ids',
+    () async {
+      SharedPreferences.setMockInitialValues({});
+      final preferences = await SharedPreferences.getInstance();
+      final api = ApiClient(
+        baseUrl: 'http://example.test',
+        client: MockClient((request) async {
+          if (request.url.path == '/api/auth/login') {
+            return http.Response(
+              jsonEncode({
+                'token': 'token-one',
+                'user': {
+                  'id': 11,
+                  'name': 'One',
+                  'email': 'one@example.com',
+                  'role': 'user',
+                },
+              }),
+              200,
+            );
+          }
+          if (request.url.path == '/api/spots') {
+            return http.Response(
+              '''{"spots":[{"id":41,"name":"Cox's Bazar Sea Beach","category":"beach","district_name":"Cox's Bazar","division_name":"Chattogram"}]}''',
+              200,
+            );
+          }
+          if (request.url.path == '/api/user/saved-spots') {
+            return http.Response('{"spots":[]}', 200);
+          }
+          if (request.url.path == '/api/user/bookings') {
+            return http.Response('{"bookings":[]}', 200);
+          }
+          return http.Response('{"error":"unexpected request"}', 500);
+        }),
+      );
+      final controller = AppController(
+        api: api,
+        preferences: preferences,
+        tokenStore: MemoryTokenStore(),
+      );
+
+      expect(controller.destinations.first.id, 0);
+      expect(
+        controller.liveDestinationFor(controller.destinations.first),
+        isNull,
+      );
+
+      await controller.login('one@example.com', 'password123');
+
+      final live = controller.liveDestinationFor(controller.destinations.first);
+      expect(live, isNotNull);
+      expect(live!.id, 41);
+      controller.dispose();
+    },
+  );
 }

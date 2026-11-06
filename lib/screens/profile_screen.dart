@@ -8,6 +8,7 @@ import '../models/destination.dart';
 import '../services/api_client.dart';
 import '../services/firebase_service.dart';
 import '../state/app_controller.dart';
+import '../widgets/booking_modification_sheet.dart';
 
 enum _AuthMode { signIn, register }
 
@@ -913,7 +914,7 @@ class _StatCard extends StatelessWidget {
   );
 }
 
-enum _BookingAction { download, cancel }
+enum _BookingAction { modify, download, cancel }
 
 class _BookingCard extends StatelessWidget {
   const _BookingCard({required this.controller, required this.booking});
@@ -966,6 +967,8 @@ class _BookingCard extends StatelessWidget {
                 tooltip: 'Booking actions',
                 onSelected: (action) {
                   switch (action) {
+                    case _BookingAction.modify:
+                      _modify(context);
                     case _BookingAction.download:
                       _downloadConfirmation(context);
                     case _BookingAction.cancel:
@@ -973,6 +976,13 @@ class _BookingCard extends StatelessWidget {
                   }
                 },
                 itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: _BookingAction.modify,
+                    child: ListTile(
+                      leading: Icon(Icons.edit_calendar_outlined),
+                      title: Text('Modify booking'),
+                    ),
+                  ),
                   PopupMenuItem(
                     value: _BookingAction.download,
                     child: ListTile(
@@ -1000,6 +1010,12 @@ class _BookingCard extends StatelessWidget {
       ),
     );
   }
+
+  Future<void> _modify(BuildContext context) => BookingModificationSheet.show(
+    context,
+    controller: controller,
+    booking: booking,
+  );
 
   Future<void> _cancel(BuildContext context) async {
     final confirmed = await showDialog<bool>(

@@ -2105,9 +2105,10 @@ app.get('/api/user/bookings', requireAuth, async (req, res) => {
 app.post('/api/bookings', requireAuth, async (req, res) => {
   try {
     const user = await currentUserFromRequest(req);
-    const { spot_id, booking_date, persons } = req.body ?? {};
+    const { spot_id, booking_date, persons, package_name } = req.body ?? {};
     const spotId = parsePositiveInteger(spot_id);
     const numPersons = parsePositiveInteger(persons);
+    const packageName = typeof package_name === 'string' ? package_name.trim() : '';
 
     if (!spotId) return res.status(400).json({ error: 'spot_id must be a positive integer' });
     if (!numPersons || numPersons > MAX_BOOKING_PERSONS) {
@@ -2115,6 +2116,9 @@ app.post('/api/bookings', requireAuth, async (req, res) => {
     }
     if (!isValidDateOnly(booking_date)) {
       return res.status(400).json({ error: 'booking_date must be a valid date in YYYY-MM-DD format' });
+    }
+    if (packageName.length > 120) {
+      return res.status(400).json({ error: 'package_name must be 120 characters or fewer' });
     }
     const todayInDhaka = currentDateInTimeZone(BOOKING_TIME_ZONE);
     const [year, month, day] = todayInDhaka.split('-').map(Number);
@@ -2142,13 +2146,22 @@ app.post('/api/bookings', requireAuth, async (req, res) => {
       return res.status(409).json({ error: 'You already have an active booking for this spot on this date.' });
     }
 
-    // Calculate estimated price based on budget category and persons
+    // Calculate price based on budget category, persons, and selected package.
     const baseRate = spot.budget_category === 'High' ? 1700 : (spot.budget_category === 'Mid' ? 1250 : 800);
-    const price = baseRate * numPersons;
+    const packageMultipliers = {
+      'Standard package': 1,
+      'Weekend Explorer': 1.15,
+      'Family Comfort Package': 1.35,
+      'Premium Relax Package': 1.8,
+      'Eco Adventure Package': 1.5,
+    };
+    const multiplier = packageMultipliers[packageName] ?? 1;
+    const price = Math.round(baseRate * numPersons * multiplier);
 
+    const targetName = packageName ? `${spot.name} • ${packageName}` : spot.name;
     const [result] = await db.query(
       "INSERT INTO bookings (user_id, spot_id, type, target_name, price, booking_date, persons, status) VALUES (?, ?, 'package', ?, ?, ?, ?, 'confirmed')",
-      [user.id, spotId, spot.name, price, booking_date, numPersons]
+      [user.id, spotId, targetName, price, booking_date, numPersons]
     );
 
     res.status(201).json({
@@ -2157,7 +2170,7 @@ app.post('/api/bookings', requireAuth, async (req, res) => {
       message: `Booking confirmed for ${spot.name} on ${booking_date}`,
       booking: {
         id: result.insertId,
-        spot_name: spot.name,
+        spot_name: targetName,
         price,
         booking_date,
         status: 'confirmed',

@@ -231,6 +231,82 @@ async function ensureMobileSchema() {
   await ensureColumn('reviews', 'reply_at', 'TIMESTAMP NULL DEFAULT NULL AFTER admin_reply');
 }
 
+function buildHistory(name, categoryKey, districtName, divisionName) {
+  const place = name;
+  const area = districtName || divisionName || 'Bangladesh';
+  const category = String(categoryKey || '').toLowerCase();
+
+  if (category.includes('beach') || category.includes('island')) {
+    return [
+      `Long before ${place} became a name on a travel map, its story was written in tides, salt air and the patient work of coastal families. Fishermen read the colour of the water each morning, boat builders repaired wooden hulls on the sand, and children learned the safe paths between the waves. The shore was never simply scenery; it was a workplace, a road and a gathering place rolled into one.`,
+      `As word spread beyond ${area}, traders, pilgrims and curious travellers began to arrive by boat and later by road. Small markets grew where nets were mended and meals were shared, carrying the flavours and languages of several communities. Storms and monsoons repeatedly reshaped the coastline, but the people who lived beside it learned to rebuild with patience, keeping their songs, recipes and local knowledge alive.`,
+      `Today ${place} invites visitors to experience that same rhythm at a gentler pace. Sunrise walks, fishing boats returning to shore and evenings beside the water still reveal the character of the place more clearly than any monument. Travel slowly, buy from local families and respect the tides, and the coast will share a story that feels personal rather than packaged.`,
+    ].join('\n\n');
+  }
+
+  if (category.includes('hill') || category.includes('lake')) {
+    return [
+      `The story of ${place} begins with the land itself: layered hills, winding roads and water that mirrors the changing sky. For generations, communities in and around ${area} have built their lives around these slopes, growing crops on terraced ground, following forest paths and moving by boat where roads could not reach. The landscape has always demanded cooperation, and that shared effort is part of its identity.`,
+      `Over time, traders, travellers and settlers brought new customs into the hills while local traditions held their ground. Markets became meeting places for different communities, and festivals, woven cloth, bamboo craft and stories passed from elders to children. The region changed under kingdoms and modern borders, yet its everyday culture remained rooted in kinship, hospitality and a deep understanding of the terrain.`,
+      `For today's traveller, ${place} offers more than a viewpoint or a photograph. It is a chance to move with the pace of the hills, listen to local guides and appreciate how people live alongside forests, water and weather. The most memorable journeys here are the quiet ones: a boat ride at first light, a shared meal in a village, or a conversation that turns a landscape into a living story.`,
+    ].join('\n\n');
+  }
+
+  if (category.includes('history')) {
+    return [
+      `The story of ${place} reaches back through layers of settlement, power and memory. The ground around ${area} has witnessed changing rulers, shifting trade routes and the everyday lives of people whose names rarely appear in official records. Walls, gateways and old foundations are only the visible fragments of a much larger story told through labour, craft and local legend.`,
+      `Each period left something behind: a style of brickwork, a word in the local dialect, a festival that outlived its original meaning. Merchants and travellers carried ideas along the roads, while craftsmen and farmers kept the settlement alive through seasons of plenty and hardship. What survives today is not simply architecture, but the habit of adapting without forgetting.`,
+      `A visit to ${place} is best approached as a walk through time rather than a checklist of monuments. Read the inscriptions slowly, notice the repairs made by later generations and ask local guides about the stories that never made it into textbooks. The past here is not sealed off from the present; it continues in the streets, markets and conversations that surround the old stones.`,
+    ].join('\n\n');
+  }
+
+  if (category.includes('religious')) {
+    return [
+      `For generations, ${place} has been more than a landmark; it has been a place where people come to pause, remember and belong. The building and the ground around it grew through gifts of labour, money and faith from families across ${area}. Its courtyards and walls hold the quiet accumulation of prayers, journeys and promises made by ordinary people.`,
+      `The history of the site is closely tied to the community that cares for it. Festivals brought distant relatives home, markets gathered around the main entrances, and travellers found shelter nearby. Through changing seasons and political eras, the rituals adapted while the essential purpose remained: to offer a shared space for reflection and renewal.`,
+      `Today, visitors of all backgrounds can appreciate ${place} for its craftsmanship, its atmosphere and its place in local life. Dress respectfully, move quietly where people are praying and take time to speak with those who keep the site alive. The deepest history here is not only in the architecture but in the continuing devotion of the people around it.`,
+    ].join('\n\n');
+  }
+
+  if (category.includes('city')) {
+    return [
+      `Like many living cities, ${place} grew around movement. Roads, river crossings and marketplaces drew people from surrounding villages, and each new arrival added a craft, a recipe or a way of speaking to the mix. What began as a practical stopping point gradually became a place with its own habits, landmarks and civic pride.`,
+      `The city's identity was shaped by work as much as by planning. Traders, clerks, teachers, labourers and students built neighbourhoods around shared needs, while parks, bridges and public buildings gave the growing population places to gather. Periods of rapid change brought new architecture and new tensions, but the streets kept absorbing them, layer by layer.`,
+      `Today ${place} is best understood by walking through its ordinary corners as well as its famous ones. Early morning markets, tea stalls, quiet lanes and riverside walks reveal how the city still works. Travellers who slow down and talk to residents will find that the story of the place is being written every day, not only preserved behind glass.`,
+    ].join('\n\n');
+  }
+
+  if (category.includes('wetland')) {
+    return [
+      `The story of ${place} is a story of water. Seasonal floods, shallow basins and reed beds have shaped how people fish, farm and move through ${area} for generations. Families learned to read the rising and falling levels, building homes and livelihoods that could bend with the monsoon rather than resist it.`,
+      `Life here depends on cooperation. Fishermen, farmers and boatmen share the same channels and the same risks, and local customs often govern when and how resources are used. Birds arrive in great numbers each season, adding another layer to a landscape already rich with sound, movement and changing colour.`,
+      `For visitors, ${place} is an invitation to disappear from the usual pace of travel. A boat journey at dawn, a cup of tea with a fishing family or an afternoon beside the water can reveal more than a hurried tour. The wetland asks for patience and care; in return, it offers one of the most memorable natural stories in Bangladesh.`,
+    ].join('\n\n');
+  }
+
+  if (category.includes('ecotourism')) {
+    return [
+      `The story of ${place} is rooted in the relationship between people and the natural world. Forests, wetlands and open land around ${area} have long provided food, shelter and materials, and local communities developed careful habits to keep those resources alive. What looks untouched to a visitor is often the result of generations of quiet stewardship.`,
+      `In recent decades, the idea of travel as a responsibility has become part of the area's identity. Guides, conservation workers and families have worked to protect wildlife habitats while creating livelihoods that depend on the forest remaining healthy. The balance is never perfect, but it has made the region a place where conservation and everyday life meet.`,
+      `A responsible visit to ${place} should begin with listening. Follow your guide, stay on marked paths, avoid plastic and choose local services wherever possible. The reward is a closer look at a landscape that is not a backdrop but a home, and a story in which the traveller can be a respectful guest rather than a passing spectator.`,
+    ].join('\n\n');
+  }
+
+  if (category.includes('culture')) {
+    return [
+      `The story of ${place} is carried less by monuments than by memory. Songs, crafts, recipes and the way people greet one another have passed through families and neighbourhoods in ${area} for generations. Each generation has added something of its own while keeping the older forms close.`,
+      `Writers, artists, musicians and craftspeople have often gathered here because the place allows room for both tradition and experiment. Festivals and informal meetings created networks that reached far beyond the district, while ordinary households kept the daily practices that give the culture its texture. The result is a heritage that feels lived-in rather than staged.`,
+      `Visitors can experience ${place} through its food, markets, workshops and performances, but the most meaningful encounters come from conversation. Ask before taking photographs, support local makers and take time to understand the context behind a song or a design. Culture here is ongoing, and every respectful visitor becomes part of its next chapter.`,
+    ].join('\n\n');
+  }
+
+  return [
+    `The story of ${place} is closely tied to the landscape of ${area}. Rivers, forests, fields or open sky have shaped how people settle, travel and earn a living, and each generation has learned to work with what the land provides. The place may look peaceful at first glance, but its quiet routines are built on knowledge passed down over many years.`,
+    `Over time, nearby communities developed their own customs around food, work and hospitality. Markets brought people together, festivals marked the turning of the year, and travellers carried news and ideas along old routes. Change arrived gradually and then more quickly, yet local families continued to adapt without losing the habits that made the place distinctive.`,
+    `Today ${place} offers travellers a chance to slow down and see beyond the usual itinerary. Local guides, family-run eateries and small markets reveal a side of the place that a hurried visit cannot reach. Travel with curiosity and respect, and the story of ${place} becomes more than a stop on a map; it becomes a memory shaped by people and place together.`,
+  ].join('\n\n');
+}
+
 async function seed() {
   console.log('[seeder] Starting database migration & synchronization...');
   
@@ -313,7 +389,7 @@ async function seed() {
       const image = spotImages[name] || '';
 
       const description = `${name} is a beautiful ${categoryKey} spot located in the ${districtName} district of ${divisionName} division.`;
-      const history = `${name} has rich history and cultural significance, making it a must-visit destination.`;
+      const history = buildHistory(name, categoryKey, districtName, divisionName);
 
       let spotId = spotsMap[name.toLowerCase()];
       if (!spotId) {
@@ -327,12 +403,15 @@ async function seed() {
         spotsMap[name.toLowerCase()] = spotId;
         console.log(`[seeder] Seeded spot: ${name} (ID: ${spotId})`);
       } else {
-        // Keep existing rows synchronized with the canonical destination image.
+        // Keep existing rows synchronized with the canonical destination data.
         await db.query(`
           UPDATE spots 
-          SET latitude = ?, longitude = ?, budget_category = ?, category = ?, image = ?
+          SET latitude = ?, longitude = ?, budget_category = ?, category = ?, image = ?,
+              history = CASE
+                WHEN history IS NULL OR history LIKE '%rich history and cultural significance%'
+                THEN ? ELSE history END
           WHERE id = ?
-        `, [lat, lng, budgetCategory, category, image, spotId]);
+        `, [lat, lng, budgetCategory, category, image, history, spotId]);
       }
 
       // 4. Populate Guides for this spot
